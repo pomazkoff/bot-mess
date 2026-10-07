@@ -70,7 +70,39 @@ ${feedback ? `\nПредыдущий вариант отклонён: ${feedback
     required: ["text"],
     additionalProperties: false,
   });
-  return text.trim();
+  const trimmed = text.trim();
+  return p.id === "oloid" ? lowercaseSentenceStarts(trimmed) : trimmed;
+}
+
+// Строчный стиль «Олоида»: первая буква поста, строки и фразы — строчная.
+// Имена собственные из короткого списка не трогаем. Середину фразы не переписываем.
+const OLOID_PROPER =
+  /^(?:олоид\p{L}*|егор\p{L}*|яковлев\p{L}*|disco|elysium|steam|android|ios|серафим\p{L}*|павловн\p{L}*|конюшенн\p{L}*|исаакиевск\p{L}*|зайчик\p{L}*|петербург(?:а|у|е|ом)?|санкт-петербург(?:а|у|е|ом)?|питер(?:а|у|е|ом)?|лиза|лизы|лизе|лизу|лизой|витя|вити|вите|витю|витей|тонет(?:а|у|е|ом)|vk)$/iu;
+
+export function lowercaseSentenceStarts(text: string): string {
+  const urls: string[] = [];
+  const masked = text.replace(/https?:\/\/\S+/g, (u) => {
+    urls.push(u);
+    return `\uE000${urls.length - 1}\uE000`;
+  });
+  const fixed = masked.replace(
+    /(^|[\n\r]|[.!?…]+[^\S\n]*)([«"„“']*)(\p{Lu})(\p{Lu}*)/gu,
+    (full, lead: string, quotes: string, first: string, restCaps: string, offset: number, whole: string) => {
+      const rest = whole.slice(offset + lead.length + quotes.length);
+      if (/^Что было, то и будет/iu.test(rest)) return full;
+      const word = rest.match(/^\p{L}+(?:-\p{L}+)?/u)?.[0] ?? first;
+      const head = first + restCaps;
+      if (OLOID_PROPER.test(word)) {
+        // «ПЕТЕРБУРГ» → «Петербург»; латиницу вроде VK не трогаем
+        if (head === word && /^[А-ЯЁ]{2,}$/.test(word)) return lead + quotes + word[0] + word.slice(1).toLowerCase();
+        return full;
+      }
+      // целиком, иначе первая буква даёт «чМ»
+      if (head === word && /^\p{Lu}{2,}$/u.test(word)) return lead + quotes + word.toLowerCase();
+      return lead + quotes + first.toLowerCase() + restCaps;
+    },
+  );
+  return fixed.replace(/\uE000(\d+)\uE000/g, (_m, i: string) => urls[Number(i)]);
 }
 
 // ---------- Механические правила ----------
@@ -123,7 +155,7 @@ export function tooSimilar(text: string, history: HistoryItem[]): string | null 
 export async function factCheck(text: string, p: Project, pictureNote?: string, now = new Date()): Promise<string | null> {
   const r = await askJson<{ ok: boolean; reason: string }>(
     `Ты строгий редактор-фактчекер. Проверь пост о проекте «${p.name}».
-Допустимые факты:
+${p.id === "oloid" ? "Строчные буквы (кроме имён собственных) и один восклицательный знак в первой строке — заданный стиль, не отклоняй из-за этого.\n" : ""}Допустимые факты:
 ${factsFor(p, now).map((f) => `• ${f}`).join("\n")}
 Запрещено:
 ${p.forbidden.map((f) => `• ${f}`).join("\n")}
