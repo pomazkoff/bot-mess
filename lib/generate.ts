@@ -51,7 +51,7 @@ ${factsFor(p, now).map((f) => `• ${f}`).join("\n")}
 ${p.forbidden.map((f) => `• ${f}`).join("\n")}
 • Любые утверждения о проекте, которых нет в фактах. Если не уверен — не пиши.
 
-ФОРМАТ: до ${MAX_LEN} символов вместе со ссылкой. Живой текст, не пресс-релиз. Ответь ТОЛЬКО JSON без markdown:
+ФОРМАТ: до ${MAX_LEN} символов вместе со ссылкой${p.id === "oloid" ? " (пустые строки между фразами тоже считаются — пиши короче, несколькими короткими фразами)" : ""}. Живой текст, не пресс-релиз. Ответь ТОЛЬКО JSON без markdown:
 {"text": "текст поста"}`;
 
   const user = `Рубрика: ${rubric.brief}
@@ -71,7 +71,8 @@ ${feedback ? `\nПредыдущий вариант отклонён: ${feedback
     additionalProperties: false,
   });
   const trimmed = text.trim();
-  return p.id === "oloid" ? lowercaseSentenceStarts(trimmed) : trimmed;
+  // Формат — до ruleCheck: пустые строки входят в лимит 450.
+  return p.id === "oloid" ? separateOloidPhrases(lowercaseSentenceStarts(trimmed)) : trimmed;
 }
 
 // Строчный стиль «Олоида»: первая буква поста, строки и фразы — строчная.
@@ -103,6 +104,38 @@ export function lowercaseSentenceStarts(text: string): string {
     },
   );
   return fixed.replace(/\uE000(\d+)\uE000/g, (_m, i: string) => urls[Number(i)]);
+}
+
+// «Олоид»: каждая фраза — своя строка, между фразами ровно одна пустая, ссылка после пустой строки.
+// Режем по . ! ? … и по уже стоящим переносам. Запятые внутри фразы не трогаем.
+// Не режем URL, «кавычки» (титул вроде «Что было, то и будет»), сокращения «т. п.» / «т. е.» и числа вроде 4–5.
+export function separateOloidPhrases(text: string): string {
+  const slots: string[] = [];
+  const hold = (s: string) => {
+    slots.push(s);
+    return `\uE000${slots.length - 1}\uE000`;
+  };
+  const restore = (part: string) => part.replace(/\uE000(\d+)\uE000/g, (_m, i: string) => slots[Number(i)] ?? "");
+
+  let s = text.replace(/\r\n?/g, "\n").trim();
+  const urls: string[] = [];
+  s = s.replace(/https?:\/\/\S+/g, (u) => {
+    urls.push(u);
+    return "";
+  });
+  s = s.replace(/«[^»]*»/g, hold);
+  s = s.replace(/(?<!\p{L})т\.[^\S\n]*[пдекн]\./giu, hold);
+  s = s.replace(/\d+[^\S\n]*[–—-][^\S\n]*\d+/g, hold);
+  s = s.replace(/\d+[.,]\d+/g, hold);
+
+  const parts = s
+    .split(/\n+|(?<=[.!?…])[^\S\n]+/u)
+    .map((p) => restore(p).replace(/[ \t]{2,}/g, " ").trim())
+    .filter(Boolean);
+
+  let out = parts.join("\n\n");
+  for (const u of urls) out = out ? `${out}\n\n${u}` : u;
+  return out.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 // ---------- Механические правила ----------
@@ -155,7 +188,7 @@ export function tooSimilar(text: string, history: HistoryItem[]): string | null 
 export async function factCheck(text: string, p: Project, pictureNote?: string, now = new Date()): Promise<string | null> {
   const r = await askJson<{ ok: boolean; reason: string }>(
     `Ты строгий редактор-фактчекер. Проверь пост о проекте «${p.name}».
-${p.id === "oloid" ? "Строчные буквы (кроме имён собственных) и один восклицательный знак в первой строке — заданный стиль, не отклоняй из-за этого.\n" : ""}Допустимые факты:
+${p.id === "oloid" ? "Строчные буквы (кроме имён собственных), один восклицательный знак в первой строке и пустая строка между фразами (ссылка тоже отдельной строкой после пустой) — заданный стиль, не отклоняй из-за этого.\n" : ""}Допустимые факты:
 ${factsFor(p, now).map((f) => `• ${f}`).join("\n")}
 Запрещено:
 ${p.forbidden.map((f) => `• ${f}`).join("\n")}
