@@ -1,4 +1,4 @@
-import { BURO_DETECTIVE_REFS, PROJECTS, pickWeighted, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
+import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, PROJECTS, pickWeighted, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
 import { detectiveRefProblem, draftPost, ruleCheck, tooSimilar, factCheck } from "./generate.js";
 import type { HistoryItem } from "./store.js";
 import type { Channel } from "./channels.js";
@@ -82,9 +82,9 @@ export function pickPicture(project: Project, rubric: Rubric, topic: string | un
   return top[Math.floor(Math.random() * top.length)];
 }
 
-/** Отсылка «Бюро», которой не было в последних постах проекта; когда все уже звучали — круг заново. */
+/** Отсылка «Бюро», которой не было в последних 20 постах проекта; когда свежих не осталось — круг заново. */
 export function pickDetectiveRef(history: HistoryItem[]): DetectiveRef {
-  const recent = history.filter((h) => h.project === "buro").slice(0, BURO_DETECTIVE_REFS.length - 1);
+  const recent = history.filter((h) => h.project === "buro").slice(0, BURO_DETECTIVE_LOOKBACK);
   const used = new Set(BURO_DETECTIVE_REFS.filter((r) => recent.some((h) => r.mark.test(h.text))).map((r) => r.id));
   const fresh = BURO_DETECTIVE_REFS.filter((r) => !used.has(r.id));
   const pool = fresh.length ? fresh : BURO_DETECTIVE_REFS;

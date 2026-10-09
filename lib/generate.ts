@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { BURO_DETECTIVE_REFS, factsFor, promoActive, type DetectiveRef, type Project, type Rubric } from "./projects.js";
+import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, factsFor, promoActive, type DetectiveRef, type Project, type Rubric } from "./projects.js";
 import type { HistoryItem } from "./store.js";
 
 const client = new Anthropic(); // ANTHROPIC_API_KEY из env
@@ -133,7 +133,11 @@ export function normalizeOloidParagraphs(text: string): string {
 
 const EMOJI = /\p{Extended_Pictographic}/gu;
 // Названия детективных фильмов и персонажей сюда не входят: для «Бюро» это стиль (BURO_DETECTIVE_REFS).
-const BANNED = [/уникальн\w* предложени/i, /успей/i, /только сегодня/i, /#\S/, /[А-ЯЁ]{6,}/, /прикрепл/i, /тарковск/i, /звягинцев/i];
+const BANNED = [
+  /уникальн\w* предложени/i, /успей/i, /только сегодня/i, /#\S/, /[А-ЯЁ]{6,}/, /прикрепл/i, /тарковск/i, /звягинцев/i,
+  // «Бруклин 9-9»: гэги про sex tape в пост не пускаем
+  /sex\s*tape/i, /секс[-\s]?тейп/iu, /(?<![\p{L}])порн/iu,
+];
 
 export function ruleCheck(text: string, p: Project, now: Date, rubric?: Rubric, linkContent?: string): string | null {
   if (!text) return "пустой текст";
@@ -163,7 +167,7 @@ function trigrams(s: string) {
 
 /** «Бюро»: в посте есть заданная мемная отсылка, и она не повторяет недавние посты. */
 export function detectiveRefProblem(text: string, history: HistoryItem[], chosen: DetectiveRef): string | null {
-  const recent = history.filter((h) => h.project === "buro").slice(0, BURO_DETECTIVE_REFS.length - 1);
+  const recent = history.filter((h) => h.project === "buro").slice(0, BURO_DETECTIVE_LOOKBACK);
   const repeated = BURO_DETECTIVE_REFS.find((r) => r.mark.test(text) && recent.some((h) => r.mark.test(h.text)));
   if (repeated) return `отсылка уже была в недавнем посте (${repeated.hint}). Возьми другую: ${chosen.hint}`;
   if (!chosen.mark.test(text)) return `нет заданной мемной отсылки. Вставь именно эту, узнаваемой шуткой, без связи сервиса с фильмом: ${chosen.hint}`;
@@ -189,7 +193,7 @@ export function tooSimilar(text: string, history: HistoryItem[]): string | null 
 export async function factCheck(text: string, p: Project, pictureNote?: string, now = new Date()): Promise<string | null> {
   const r = await askJson<{ ok: boolean; reason: string }>(
     `Ты строгий редактор-фактчекер. Проверь пост о проекте «${p.name}».
-${p.id === "oloid" ? "Строчные буквы (кроме имён собственных), один восклицательный знак в первой строке и короткие абзацы (одна-две связанные фразы на строке, не больше трёх; между абзацами пустая строка; ссылка отдельной строкой после пустой) — заданный стиль, не отклоняй из-за этого.\n" : ""}${p.id === "buro" ? "Отсылки к известным детективным фильмам, сериалам и персонажам (Шерлок Холмс, «элементарно, Ватсон», «Шерлок» BBC, «Достать ножи», Пуаро и «Убийство в Восточном экспрессе», Коломбо и «ещё один вопрос», «Настоящий детектив», «Твин Пикс», Штирлиц и «Семнадцать мгновений весны», «Следствие ведут Колобки», «Место встречи изменить нельзя» и «Вор должен сидеть в тюрьме», Знатоки, Скуби-Ду, «Улица разбитых фонарей») — это стиль и шутка, не факты о проекте. Не отклоняй их, если цитата или парафраз узнаваемые и не приписаны не тому персонажу. Отклоняй, только если пост утверждает, что сервис основан на этом фильме, снят по нему или связан с правообладателем.\n" : ""}Допустимые факты:
+${p.id === "oloid" ? "Строчные буквы (кроме имён собственных), один восклицательный знак в первой строке и короткие абзацы (одна-две связанные фразы на строке, не больше трёх; между абзацами пустая строка; ссылка отдельной строкой после пустой) — заданный стиль, не отклоняй из-за этого.\n" : ""}${p.id === "buro" ? `Отсылки к детективам — стиль и шутка, не факты о проекте. Допустимы только эти якоря, каждый своим героем:\n${BURO_DETECTIVE_REFS.map((ref) => `• ${ref.hint}`).join("\n")}\nНе отклоняй такую шутку, если она узнаваемая и не приписана чужому персонажу. Отклоняй, если пост утверждает, что сервис основан на фильме, снят по нему или связан с правообладателем, если цитата приписана не тому герою, если раскрыта развязка или описана жестокость, или если шутка непристойная.\n` : ""}Допустимые факты:
 ${factsFor(p, now).map((f) => `• ${f}`).join("\n")}
 Запрещено:
 ${p.forbidden.map((f) => `• ${f}`).join("\n")}
