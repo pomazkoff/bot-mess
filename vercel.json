@@ -1,24 +1,32 @@
 {
   "crons": [
     {
-      "path": "/api/cron",
+      "path": "/api/cron?channel=oloid",
+      "schedule": "0 7 * * *"
+    },
+    {
+      "path": "/api/stats?notify=1",
+      "schedule": "0 7 * * 1"
+    },
+    {
+      "path": "/api/cron?channel=pomazkof",
       "schedule": "0 8 * * *"
     },
     {
-      "path": "/api/cron",
-      "schedule": "0 15 * * *"
+      "path": "/api/cron?channel=oloid",
+      "schedule": "0 12 * * *"
     },
     {
-      "path": "/api/cron?channel=oloid",
-      "schedule": "0 10 * * *"
+      "path": "/api/cron?channel=pomazkof",
+      "schedule": "0 13 * * *"
     },
     {
       "path": "/api/cron?channel=oloid",
       "schedule": "0 17 * * *"
     },
     {
-      "path": "/api/stats?notify=1",
-      "schedule": "0 7 * * 1"
+      "path": "/api/cron?channel=pomazkof",
+      "schedule": "0 18 * * *"
     }
   ],
   "functions": {

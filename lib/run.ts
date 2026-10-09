@@ -1,5 +1,5 @@
-import { PROJECTS, pickWeighted, type Media, type Picture, type Project, type Rubric } from "./projects.js";
-import { draftPost, ruleCheck, tooSimilar, factCheck } from "./generate.js";
+import { BURO_DETECTIVE_REFS, PROJECTS, pickWeighted, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
+import { detectiveRefProblem, draftPost, ruleCheck, tooSimilar, factCheck } from "./generate.js";
 import type { HistoryItem } from "./store.js";
 import type { Channel } from "./channels.js";
 
@@ -15,7 +15,8 @@ export type Draft = {
   rejected: string[];
 };
 
-/** Рубрика по весам без повтора предыдущей; рубрика-посев (alternateRubric) идёт через пост. */
+/** Рубрика по весам без повтора предыдущей; рубрика-посев (alternateRubric) идёт через пост.
+ *  При трёх постах в день посев (трейлер «Олоида») выходит примерно через раз, то есть 1–2 раза в сутки. */
 export function pickRubric(project: Project, history: HistoryItem[], forcedRubric?: string): Rubric {
   const forced = project.rubrics.find((r) => r.id === forcedRubric);
   if (forced) return forced;
@@ -47,6 +48,15 @@ export function pickPicture(project: Project, rubric: Rubric, topic: string | un
   const best = Math.max(...pool.map(score));
   const top = pool.filter((p) => score(p) === best);
   return top[Math.floor(Math.random() * top.length)];
+}
+
+/** Отсылка «Бюро», которой не было в последних постах проекта; когда все уже звучали — круг заново. */
+export function pickDetectiveRef(history: HistoryItem[]): DetectiveRef {
+  const recent = history.filter((h) => h.project === "buro").slice(0, BURO_DETECTIVE_REFS.length - 1);
+  const used = new Set(BURO_DETECTIVE_REFS.filter((r) => recent.some((h) => r.mark.test(h.text))).map((r) => r.id));
+  const fresh = BURO_DETECTIVE_REFS.filter((r) => !used.has(r.id));
+  const pool = fresh.length ? fresh : BURO_DETECTIVE_REFS;
+  return pool[Math.floor(Math.random() * pool.length)];
 }
 
 /** Тема рубрики, которой не было в недавних постах этой рубрики; когда темы кончились — круг заново. */
@@ -87,15 +97,17 @@ export async function makeDraft(opts: {
   const topicTag = pickTopicTag(project, rubric, history);
   const picture = rubric.media ? undefined : pickPicture(project, rubric, topic, history);
   const media: Media | undefined = rubric.media ?? (picture && { type: "IMAGE", url: picture.url });
+  const detective = project.id === "buro" ? pickDetectiveRef(history) : undefined;
   const base = { project, rubricId: rubric.id, topic, topicTag, media };
 
   let feedback: string | undefined;
   const rejected: string[] = [];
 
   for (let i = 0; i < MAX_ATTEMPTS; i++) {
-    const candidate = await draftPost(project, rubric, history, now, feedback, topic, channel.voiceNote, linkContent, picture?.about);
+    const candidate = await draftPost(project, rubric, history, now, feedback, topic, channel.voiceNote, linkContent, picture?.about, detective?.hint);
     const problem =
       ruleCheck(candidate, project, now, rubric, linkContent) ??
+      (detective ? detectiveRefProblem(candidate, history, detective) : null) ??
       tooSimilar(candidate, history) ??
       (await factCheck(candidate, project, picture?.about, now));
     if (!problem) return { ...base, text: candidate, rejected };

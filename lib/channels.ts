@@ -11,7 +11,8 @@ export type Channel = {
 };
 
 export const CHANNELS: Channel[] = [
-  { id: "pomazkof", name: "@pomazkof", tokenEnv: "THREADS_ACCESS_TOKEN", projects: ["buro", "oloid"] },
+  // Только «Бюро»: «Олоид» ведёт бренд-аккаунт, чтобы у каждого проекта было ровно 3 поста в день.
+  { id: "pomazkof", name: "@pomazkof", tokenEnv: "THREADS_ACCESS_TOKEN", projects: ["buro"] },
   {
     id: "oloid",
     name: "@oloid.vn",

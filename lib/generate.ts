@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { factsFor, promoActive, type Project, type Rubric } from "./projects.js";
+import { BURO_DETECTIVE_REFS, factsFor, promoActive, type DetectiveRef, type Project, type Rubric } from "./projects.js";
 import type { HistoryItem } from "./store.js";
 
 const client = new Anthropic(); // ANTHROPIC_API_KEY из env
@@ -34,6 +34,7 @@ export async function draftPost(
   voiceNote?: string, // поправка голоса для аккаунта (см. lib/channels.ts)
   linkContent?: string, // utm_content: аккаунт-рубрика
   pictureNote?: string, // что на приложенной картинке
+  detectiveHint?: string, // заданная мемная отсылка «Бюро» (стиль, не факт)
 ) {
   const link = (rubric.link ?? p.link)(now, linkContent);
   const recent = history.filter((h) => h.project === p.id).slice(0, 12).map((h) => `— ${h.text}`).join("\n");
@@ -50,6 +51,7 @@ ${factsFor(p, now).map((f) => `• ${f}`).join("\n")}
 ЗАПРЕЩЕНО:
 ${p.forbidden.map((f) => `• ${f}`).join("\n")}
 • Любые утверждения о проекте, которых нет в фактах. Если не уверен — не пиши.
+${p.id === "buro" ? "\nМемная отсылка к детективному фильму, сериалу или персонажу — шутка в голосе, не утверждение о проекте. Цитату не выдавай за факт о «Бюро», не приписывай чужому герою и не намекай, что сервис сделан по этому фильму.\n" : ""}
 
 ФОРМАТ: до ${MAX_LEN} символов вместе со ссылкой${p.id === "oloid" ? " (пустые строки между абзацами тоже считаются — пиши короткими абзацами по одной-две связанные фразы, не разбивай каждую фразу отдельной строкой)" : ""}. Живой текст, не пресс-релиз. Ответь ТОЛЬКО JSON без markdown:
 {"text": "текст поста"}`;
@@ -59,8 +61,9 @@ ${topic ? `Тема поста: ${topic}` : ""}
 ${pictureNote ? `К посту будет приложена картинка из игры: ${pictureNote}. Можно опереться на одну её деталь; не описывай картинку целиком, не пиши «на картинке» и не добавляй того, чего на ней нет.` : ""}
 ${p.requireLink ? `Обязательно поставь в конце ссылку: ${link}` : rubric.id === "question" ? "Ссылку не ставь." : `Если уместно, поставь в конце ссылку: ${link}`}
 ${season ? `Сезонный повод (по желанию): ${season}` : ""}
+${detectiveHint ? `Обязательная отсылка в этом посте (мем, не факт о проекте и не связь с фильмом): ${detectiveHint}` : ""}
 
-Недавние посты — НЕ повторяй их заходы, формулировки и структуру:
+Недавние посты — НЕ повторяй их заходы, формулировки, структуру${p.id === "buro" ? " и мемную детективную отсылку" : ""}:
 ${recent || "(пока нет)"}
 ${feedback ? `\nПредыдущий вариант отклонён: ${feedback}. Исправь.` : ""}`;
 
@@ -129,6 +132,7 @@ export function normalizeOloidParagraphs(text: string): string {
 // ---------- Механические правила ----------
 
 const EMOJI = /\p{Extended_Pictographic}/gu;
+// Названия детективных фильмов и персонажей сюда не входят: для «Бюро» это стиль (BURO_DETECTIVE_REFS).
 const BANNED = [/уникальн\w* предложени/i, /успей/i, /только сегодня/i, /#\S/, /[А-ЯЁ]{6,}/, /прикрепл/i, /тарковск/i, /звягинцев/i];
 
 export function ruleCheck(text: string, p: Project, now: Date, rubric?: Rubric, linkContent?: string): string | null {
@@ -157,6 +161,15 @@ function trigrams(s: string) {
   return set;
 }
 
+/** «Бюро»: в посте есть заданная мемная отсылка, и она не повторяет недавние посты. */
+export function detectiveRefProblem(text: string, history: HistoryItem[], chosen: DetectiveRef): string | null {
+  const recent = history.filter((h) => h.project === "buro").slice(0, BURO_DETECTIVE_REFS.length - 1);
+  const repeated = BURO_DETECTIVE_REFS.find((r) => r.mark.test(text) && recent.some((h) => r.mark.test(h.text)));
+  if (repeated) return `отсылка уже была в недавнем посте (${repeated.hint}). Возьми другую: ${chosen.hint}`;
+  if (!chosen.mark.test(text)) return `нет заданной мемной отсылки. Вставь именно эту, узнаваемой шуткой, без связи сервиса с фильмом: ${chosen.hint}`;
+  return null;
+}
+
 export function tooSimilar(text: string, history: HistoryItem[]): string | null {
   const a = trigrams(text);
   const opening = text.slice(0, 30).toLowerCase();
@@ -176,7 +189,7 @@ export function tooSimilar(text: string, history: HistoryItem[]): string | null 
 export async function factCheck(text: string, p: Project, pictureNote?: string, now = new Date()): Promise<string | null> {
   const r = await askJson<{ ok: boolean; reason: string }>(
     `Ты строгий редактор-фактчекер. Проверь пост о проекте «${p.name}».
-${p.id === "oloid" ? "Строчные буквы (кроме имён собственных), один восклицательный знак в первой строке и короткие абзацы (одна-две связанные фразы на строке, не больше трёх; между абзацами пустая строка; ссылка отдельной строкой после пустой) — заданный стиль, не отклоняй из-за этого.\n" : ""}Допустимые факты:
+${p.id === "oloid" ? "Строчные буквы (кроме имён собственных), один восклицательный знак в первой строке и короткие абзацы (одна-две связанные фразы на строке, не больше трёх; между абзацами пустая строка; ссылка отдельной строкой после пустой) — заданный стиль, не отклоняй из-за этого.\n" : ""}${p.id === "buro" ? "Отсылки к известным детективным фильмам, сериалам и персонажам (Шерлок Холмс, «элементарно, Ватсон», «Шерлок» BBC, «Достать ножи», Пуаро и «Убийство в Восточном экспрессе», Коломбо и «ещё один вопрос», «Настоящий детектив», «Твин Пикс», Штирлиц и «Семнадцать мгновений весны», «Следствие ведут Колобки», «Место встречи изменить нельзя» и «Вор должен сидеть в тюрьме», Знатоки, Скуби-Ду, «Улица разбитых фонарей») — это стиль и шутка, не факты о проекте. Не отклоняй их, если цитата или парафраз узнаваемые и не приписаны не тому персонажу. Отклоняй, только если пост утверждает, что сервис основан на этом фильме, снят по нему или связан с правообладателем.\n" : ""}Допустимые факты:
 ${factsFor(p, now).map((f) => `• ${f}`).join("\n")}
 Запрещено:
 ${p.forbidden.map((f) => `• ${f}`).join("\n")}

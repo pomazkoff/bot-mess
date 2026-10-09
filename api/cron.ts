@@ -19,7 +19,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Пауза отдельного аккаунта: PAUSED_<ID>=1 (например, PAUSED_OLOID), общая пауза — PAUSED
   const channelPause = `PAUSED_${channel.id.toUpperCase()}`;
   if (process.env[channelPause]?.trim() === "1") return res.json({ skipped: `${channelPause}=1` });
-  // Аккаунт ещё не подключён — молча пропускаем, чтобы не слать ошибки в Telegram дважды в день
+  // Аккаунт ещё не подключён — молча пропускаем, чтобы не слать ошибки в Telegram на каждом слоте
   if (!process.env[channel.tokenEnv]?.trim()) return res.json({ skipped: `нет ${channel.tokenEnv}` });
 
   const dry = req.query.dry === "1" || process.env.DRY_RUN?.trim() === "1";
