@@ -15,15 +15,37 @@ export type Draft = {
   rejected: string[];
 };
 
-/** Рубрика по весам без повтора предыдущей; рубрика-посев (alternateRubric) идёт через пост.
- *  При трёх постах в день посев (трейлер «Олоида») выходит примерно через раз, то есть 1–2 раза в сутки. */
-export function pickRubric(project: Project, history: HistoryItem[], forcedRubric?: string): Rubric {
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Рубрика по весам без повтора предыдущей на этом аккаунте.
+ *  alternateRubric без alternateEveryDays — через пост.
+ *  alternateEveryDays — не чаще раза в N суток: срок считается по всей истории проекта
+ *  (allHistory, включая старые посты с другого аккаунта). Если срок вышел, следующий пост — эта рубрика. */
+export function pickRubric(
+  project: Project,
+  history: HistoryItem[],
+  now: Date,
+  forcedRubric?: string,
+  allHistory: HistoryItem[] = history,
+): Rubric {
   const forced = project.rubrics.find((r) => r.id === forcedRubric);
   if (forced) return forced;
   const lastRubric = history.find((h) => h.project === project.id)?.rubric;
   const alt = project.rubrics.find((r) => r.id === project.alternateRubric);
-  if (alt && lastRubric !== alt.id) return alt;
-  return pickWeighted(project.rubrics.filter((r) => r !== alt && r.weight > 0), lastRubric, (r) => r.id);
+  const normal = () => pickWeighted(project.rubrics.filter((r) => r !== alt && r.weight > 0), lastRubric, (r) => r.id);
+  if (!alt) return normal();
+  const days = project.alternateEveryDays;
+  if (days == null) return lastRubric !== alt.id ? alt : normal();
+  return alternateDue(project.id, alt.id, allHistory, now, days) ? alt : normal();
+}
+
+/** Прошло не меньше N суток с последнего поста рубрики-посева, либо такого поста ещё не было. */
+function alternateDue(projectId: string, rubricId: string, history: HistoryItem[], now: Date, days: number): boolean {
+  const last = history.find((h) => h.project === projectId && h.rubric === rubricId);
+  if (!last?.at) return true;
+  const at = Date.parse(last.at);
+  if (Number.isNaN(at)) return true;
+  return now.getTime() - at >= days * DAY_MS;
 }
 
 /** Тема Threads: своя у рубрики или та, что дольше всех не использовалась в постах проекта. */
@@ -37,16 +59,26 @@ export function pickTopicTag(project: Project, rubric: Rubric, history: HistoryI
   return [...tags].sort((a, b) => age(b) - age(a))[0];
 }
 
-/** Картинка к посту: не из недавних постов, лучше совпадающая тегами с рубрикой и темой. */
+/** Картинка к посту: лучшее совпадение тегов с рубрикой и темой.
+ *  Теги не совпали — всё равно кадр, тот, что дольше всех не встречался в истории.
+ *  Кадры из последних 20 постов проекта не повторяем, пока остаётся другой. */
 export function pickPicture(project: Project, rubric: Rubric, topic: string | undefined, history: HistoryItem[]): Picture | undefined {
-  if (!rubric.withPicture || !project.pictures?.length) return undefined;
-  const recent = new Set(history.slice(0, 20).map((h) => h.media));
-  const fresh = project.pictures.filter((p) => !recent.has(p.url));
-  const pool = fresh.length ? fresh : project.pictures;
+  const pics = project.pictures;
+  if (!rubric.withPicture || !pics?.length) return undefined;
+  const own = history.filter((h) => h.project === project.id);
+  const recent = new Set(own.slice(0, 20).map((h) => h.media));
+  const fresh = pics.filter((p) => !recent.has(p.url));
+  const pool = fresh.length ? fresh : pics;
   const text = `${rubric.id} ${topic ?? ""}`.toLowerCase();
   const score = (p: Picture) => p.tags.filter((t) => text.includes(t)).length;
   const best = Math.max(...pool.map(score));
-  const top = pool.filter((p) => score(p) === best);
+  const matched = best > 0 ? pool.filter((p) => score(p) === best) : pool;
+  const age = (url: string) => {
+    const i = own.findIndex((h) => h.media === url);
+    return i === -1 ? Number.POSITIVE_INFINITY : i;
+  };
+  const oldest = Math.max(...matched.map((p) => age(p.url)));
+  const top = matched.filter((p) => age(p.url) === oldest);
   return top[Math.floor(Math.random() * top.length)];
 }
 
@@ -87,10 +119,10 @@ export async function makeDraft(opts: {
   const { channel, history, lastProject, forcedProject, forcedRubric, forcedTopic, now } = opts;
   const project = pickProject(channel, lastProject, forcedProject);
 
-  // Рубрика и чередование трейлера — по постам этого аккаунта; темы и антиповтор — по всем аккаунтам,
-  // чтобы два аккаунта не выдавали одно и то же
+  // «Не повторять прошлую рубрику» — по постам этого аккаунта. Интервал трейлера — по всей истории проекта.
+  // Темы и антиповтор — тоже по всем аккаунтам, чтобы два аккаунта не выдавали одно и то же
   const own = history.filter((h) => (h.channel ?? "pomazkof") === channel.id);
-  const rubric = pickRubric(project, own, forcedRubric);
+  const rubric = pickRubric(project, own, now, forcedRubric, history);
   const wanted = forcedTopic?.toLowerCase();
   const topic = (wanted && rubric.topics?.find((t) => t.toLowerCase().includes(wanted))) || pickTopic(rubric, history);
   const linkContent = `${channel.id}-${rubric.id}`;
