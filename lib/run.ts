@@ -1,4 +1,4 @@
-import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, PROJECTS, pickWeighted, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
+import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, PROJECTS, pickWeighted, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
 import { detectiveRefProblem, draftPost, ruleCheck, tooSimilar, factCheck } from "./generate.js";
 import type { HistoryItem } from "./store.js";
 import type { Channel } from "./channels.js";
@@ -82,13 +82,47 @@ export function pickPicture(project: Project, rubric: Rubric, topic: string | un
   return top[Math.floor(Math.random() * top.length)];
 }
 
-/** Отсылка «Бюро», которой не было в последних 20 постах проекта; когда свежих не осталось — круг заново. */
-export function pickDetectiveRef(history: HistoryItem[]): DetectiveRef {
+/** Отсылка «Бюро», которой не было в последних 20 постах проекта; когда свежих не осталось — круг заново.
+ *  forceNextRef — один раз, пока этого якоря нет в постах «Бюро» новее BURO_FORCE_NEXT_REF_SINCE.
+ *  Если историю не удалось проверить, обычный выбор. */
+export function pickDetectiveRef(history: HistoryItem[], forceNextRef?: string): DetectiveRef {
+  const forced = forcedRefIfPending(history, forceNextRef);
+  if (forced) return forced;
   const recent = history.filter((h) => h.project === "buro").slice(0, BURO_DETECTIVE_LOOKBACK);
   const used = new Set(BURO_DETECTIVE_REFS.filter((r) => recent.some((h) => r.mark.test(h.text))).map((r) => r.id));
   const fresh = BURO_DETECTIVE_REFS.filter((r) => !used.has(r.id));
   const pool = fresh.length ? fresh : BURO_DETECTIVE_REFS;
   return pool[Math.floor(Math.random() * pool.length)];
+}
+
+/** Отсылка forceNextRef, если в видимой истории её ещё не было после метки коммита. Иначе null. */
+function forcedRefIfPending(history: HistoryItem[], forceNextRef?: string): DetectiveRef | null {
+  if (!forceNextRef) return null;
+  try {
+    const ref = BURO_DETECTIVE_REFS.find((r) => r.id === forceNextRef);
+    const since = Date.parse(BURO_FORCE_NEXT_REF_SINCE);
+    if (!ref || Number.isNaN(since) || !Array.isArray(history)) return null;
+
+    let oldest = Number.POSITIVE_INFINITY;
+    let sawDatedBuro = false;
+    for (const h of history) {
+      if (!h || h.project !== "buro" || typeof h.text !== "string") continue;
+      const at = typeof h.at === "string" ? Date.parse(h.at) : Number.NaN;
+      const hit = ref.mark.test(h.text);
+      if (Number.isNaN(at)) {
+        if (hit) return null;
+        continue;
+      }
+      sawDatedBuro = true;
+      if (at < oldest) oldest = at;
+      if (hit && at >= since) return null;
+    }
+    // Вся видимая лента «Бюро» новее метки, а якоря в ней нет: пост уже мог уйти из окна. Не повторяем.
+    if (sawDatedBuro && oldest >= since) return null;
+    return ref;
+  } catch {
+    return null;
+  }
 }
 
 /** Тема рубрики, которой не было в недавних постах этой рубрики; когда темы кончились — круг заново. */
@@ -129,7 +163,7 @@ export async function makeDraft(opts: {
   const topicTag = pickTopicTag(project, rubric, history);
   const picture = rubric.media ? undefined : pickPicture(project, rubric, topic, history);
   const media: Media | undefined = rubric.media ?? (picture && { type: "IMAGE", url: picture.url });
-  const detective = project.id === "buro" ? pickDetectiveRef(history) : undefined;
+  const detective = project.id === "buro" ? pickDetectiveRef(history, project.forceNextRef) : undefined;
   const base = { project, rubricId: rubric.id, topic, topicTag, media };
 
   let feedback: string | undefined;
