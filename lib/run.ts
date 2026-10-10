@@ -1,5 +1,5 @@
 import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, PROJECTS, pickWeighted, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
-import { detectiveRefProblem, draftPost, ruleCheck, tooSimilar, factCheck } from "./generate.js";
+import { detectiveRefProblem, draftPost, repeatedEnding, ruleCheck, tooSimilar, factCheck } from "./generate.js";
 import type { HistoryItem } from "./store.js";
 import type { Channel } from "./channels.js";
 
@@ -174,6 +174,7 @@ export async function makeDraft(opts: {
     const problem =
       ruleCheck(candidate, project, now, rubric, linkContent) ??
       (detective ? detectiveRefProblem(candidate, history, detective) : null) ??
+      repeatedEnding(candidate, history, project.id) ??
       tooSimilar(candidate, history) ??
       (await factCheck(candidate, project, picture?.about, now));
     if (!problem) return { ...base, text: candidate, rejected };

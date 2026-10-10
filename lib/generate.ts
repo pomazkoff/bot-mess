@@ -63,8 +63,9 @@ ${p.requireLink ? `Обязательно поставь в конце ссыл�
 ${season ? `Сезонный повод (по желанию): ${season}` : ""}
 ${detectiveHint ? `Обязательная отсылка в этом посте (мем, не факт о проекте и не связь с фильмом): ${detectiveHint}` : ""}
 
-Недавние посты — НЕ повторяй их заходы, формулировки, структуру${p.id === "buro" ? " и мемную детективную отсылку" : ""}:
+Недавние посты — НЕ повторяй их заходы, формулировки, структуру${p.id === "buro" ? " и мемную детективную отсылку" : ""}${p.id === "oloid" ? " и последнюю строку перед ссылкой" : ""}:
 ${recent || "(пока нет)"}
+${oloidEndingHint(p.id, history)}
 ${feedback ? `\nПредыдущий вариант отклонён: ${feedback}. Исправь.` : ""}`;
 
   const { text } = await askJson<{ text: string }>(system, user, {
@@ -171,6 +172,88 @@ export function detectiveRefProblem(text: string, history: HistoryItem[], chosen
   const repeated = BURO_DETECTIVE_REFS.find((r) => r.mark.test(text) && recent.some((h) => r.mark.test(h.text)));
   if (repeated) return `отсылка уже была в недавнем посте (${repeated.hint}). Возьми другую: ${chosen.hint}`;
   if (!chosen.mark.test(text)) return `нет заданной мемной отсылки. Вставь именно эту, узнаваемой шуткой, без связи сервиса с фильмом: ${chosen.hint}`;
+  return null;
+}
+
+// «Олоид»: последняя строка перед ссылкой не повторяет концовки недавних постов.
+const OLOID_ENDING_LOOKBACK = 10;
+const ENDING_SIMILARITY = 0.8;
+const ENDING_REPEAT = "концовка повторяет недавний пост, придумай другую";
+
+/** Последняя непустая строка без ссылки — концовка поста. */
+function lastNonLinkLine(text: string): string {
+  const lines = text
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/https?:\/\/\S+/g, "").trim())
+    .filter(Boolean);
+  return lines.at(-1) ?? "";
+}
+
+/** Строчные, без эмодзи и знаков, «ё» как «е» — чтобы сравнивать формулировку, а не вёрстку. */
+function normEnding(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/\p{Extended_Pictographic}/gu, "")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function firstWords(s: string, n: number): string {
+  return s.split(" ").slice(0, n).join(" ");
+}
+
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a) return b.length;
+  if (!b) return a.length;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+      cur[j] = Math.min(cur[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+/** 1 — одинаковые строки, 0 — ничего общего. */
+function endingSimilarity(a: string, b: string): number {
+  const max = Math.max(a.length, b.length);
+  if (!max) return 1;
+  return 1 - levenshtein(a, b) / max;
+}
+
+function oloidEndingHint(projectId: string, history: HistoryItem[]): string {
+  if (projectId !== "oloid") return "";
+  const lines = history
+    .filter((h) => h.project === "oloid")
+    .slice(0, OLOID_ENDING_LOOKBACK)
+    .map((h) => lastNonLinkLine(h.text))
+    .filter(Boolean);
+  if (!lines.length) return "";
+  return `Концовки недавних постов — последнюю строку так не заканчивай и близко не повторяй:\n${lines.map((e) => `— ${e}`).join("\n")}\n`;
+}
+
+/** «Олоид»: концовка совпала или почти совпала с последней строкой одного из последних постов. */
+export function repeatedEnding(text: string, history: HistoryItem[], projectId: string): string | null {
+  if (projectId !== "oloid") return null;
+  const ending = normEnding(lastNonLinkLine(text));
+  if (!ending) return null;
+  const head = firstWords(ending, 4);
+  const headCounts = head.split(" ").length >= 4;
+  const recent = history.filter((h) => h.project === "oloid").slice(0, OLOID_ENDING_LOOKBACK);
+  for (const h of recent) {
+    const prev = normEnding(lastNonLinkLine(typeof h.text === "string" ? h.text : ""));
+    if (!prev) continue;
+    const prevWords = prev.split(" ");
+    if (endingSimilarity(ending, prev) >= ENDING_SIMILARITY) return ENDING_REPEAT;
+    if (headCounts && prevWords.length >= 4 && firstWords(prev, 4) === head) return ENDING_REPEAT;
+  }
   return null;
 }
 
