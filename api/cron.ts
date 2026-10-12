@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { makeDraft } from "../lib/run.js";
-import { publishPost } from "../lib/threads.js";
+import { postAlreadyPublished, publishPost } from "../lib/threads.js";
 import { getHistory, pushHistory, getLastProject, setLastProject } from "../lib/store.js";
 import { notify } from "../lib/notify.js";
 import { channelById } from "../lib/channels.js";
@@ -46,7 +46,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Картинка — украшение: если Threads её не принял, публикуем текст без неё. Видео (трейлер) без файла не публикуем.
     let used = media;
     const postId = await publishPost(channel, text, topicTag, media).catch(async (e) => {
-      if (media?.type !== "IMAGE") throw e;
+      // Картинка не прошла — постим текст. Если контейнер уже опубликован, второй пост не создаём.
+      if (media?.type !== "IMAGE" || postAlreadyPublished(e)) throw e;
       await notify(`⚠️ ${where}: картинка не прошла (${e?.message ?? e}), публикую пост без неё.`);
       used = undefined;
       return publishPost(channel, text, topicTag);
