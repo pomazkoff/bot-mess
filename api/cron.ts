@@ -16,9 +16,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const channel = channelById(typeof req.query.channel === "string" ? req.query.channel : undefined);
   if (!channel) return res.status(400).json({ error: "неизвестный channel" });
-  // Пауза отдельного аккаунта: PAUSED_<ID>=1 (например, PAUSED_OLOID), общая пауза — PAUSED
+  // Пауза отдельного аккаунта: PAUSED_<ID>=1 (например, PAUSED_OLOID), общая пауза — PAUSED.
+  // Кодовый выключатель channel.paused (сейчас @pomazkof): слот пропускается так же, без Telegram.
+  // Снять — убрать paused у канала в lib/channels.ts и задеплоить.
   const channelPause = `PAUSED_${channel.id.toUpperCase()}`;
   if (process.env[channelPause]?.trim() === "1") return res.json({ skipped: `${channelPause}=1` });
+  if (channel.paused) return res.json({ skipped: `${channel.id} paused` });
   // Аккаунт ещё не подключён — молча пропускаем, чтобы не слать ошибки в Telegram на каждом слоте
   if (!process.env[channel.tokenEnv]?.trim()) return res.json({ skipped: `нет ${channel.tokenEnv}` });
 
