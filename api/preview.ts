@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { makeDraft } from "../lib/run.js";
-import { getHistory, getLastProject } from "../lib/store.js";
+import { getAppStoreDay, getHistory, getLastProject } from "../lib/store.js";
 import { notify } from "../lib/notify.js";
 import { channelById } from "../lib/channels.js";
 
@@ -8,6 +8,7 @@ import { channelById } from "../lib/channels.js";
 // Этот эндпоинт НЕ импортирует модуль публикации и ничего не пишет в историю —
 // утечка PREVIEW_KEY позволяет только тратить токены Anthropic, но не постить.
 // Вызов: /api/preview?key=<PREVIEW_KEY>[&channel=pomazkof|oloid]&project=buro|oloid[&rubric=<id рубрики>][&topic=<фрагмент темы>][&notify=1 — прислать превью в Telegram]
+// &rubric=appstore — пост со ссылкой на App Store. Без rubric бот сам берёт его, если за эти сутки МСК такого поста ещё не было (ключ Redis threads:appstore_day:oloid).
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const key = process.env.PREVIEW_KEY;
   if (!key || req.query.key !== key) return res.status(401).json({ error: "unauthorized" });
@@ -28,6 +29,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let redis = "ok";
     const history = await getHistory().catch((e) => ((redis = String(e?.message ?? e)), []));
     const lastProject = await getLastProject(channel).catch(() => null);
+    const dailyDoneDate = channel.projects.includes("oloid")
+      ? await getAppStoreDay("oloid").catch((e) => ((redis = String(e?.message ?? e)), null))
+      : null;
     const { project, rubricId, topic, topicTag, media, text, rejected } = await makeDraft({
       channel,
       history,
@@ -36,6 +40,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       forcedRubric: typeof req.query.rubric === "string" ? req.query.rubric : undefined,
       forcedTopic: typeof req.query.topic === "string" ? req.query.topic : undefined,
       now: new Date(),
+      dailyDoneDate,
     });
     const telegram =
       req.query.notify === "1"

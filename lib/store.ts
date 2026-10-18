@@ -86,3 +86,14 @@ export async function getLastProject(ch: Channel): Promise<string | null> {
 export async function setLastProject(ch: Channel, id: string) {
   await (await db()).set(lastProjectKey(ch), id);
 }
+
+// МСК-дата последнего успешно опубликованного App Store-поста. Неудачный слот сюда не пишется.
+const appStoreDayKey = (projectId: string) => `threads:appstore_day:${projectId}`;
+
+export async function getAppStoreDay(projectId: string): Promise<string | null> {
+  return (await db()).get(appStoreDayKey(projectId));
+}
+
+export async function setAppStoreDay(projectId: string, mskDate: string) {
+  await (await db()).set(appStoreDayKey(projectId), mskDate);
+}

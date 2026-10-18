@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { makeDraft } from "../lib/run.js";
+import { makeDraft, mskDay } from "../lib/run.js";
 import { postAlreadyPublished, publishPost } from "../lib/threads.js";
-import { getHistory, pushHistory, getLastProject, setLastProject } from "../lib/store.js";
+import { getAppStoreDay, getHistory, getLastProject, pushHistory, setAppStoreDay, setLastProject } from "../lib/store.js";
 import { notify } from "../lib/notify.js";
 import { channelById } from "../lib/channels.js";
 
@@ -30,12 +30,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const history = await getHistory();
+    // null — App Store-поста ещё не было. Дата пишется ниже, только после успешной публикации.
+    const dailyDoneDate = channel.projects.includes("oloid") ? await getAppStoreDay("oloid") : null;
     const draft = await makeDraft({
       channel,
       history,
       lastProject: await getLastProject(channel),
       forcedProject: typeof req.query.project === "string" ? req.query.project : undefined,
       now,
+      dailyDoneDate,
     });
     const { project, rubricId, topic, topicTag, media, text, rejected } = draft;
     const where = `${channel.name} · ${project.name}`;
@@ -57,6 +60,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
     await pushHistory({ channel: channel.id, project: project.id, rubric: rubricId, topic, topicTag, text, media: used?.url, postId, at: now.toISOString() });
     await setLastProject(channel, project.id);
+    if (project.dailyRubric && rubricId === project.dailyRubric) await setAppStoreDay(project.id, mskDay(now));
     await notify(`✅ Опубликовано (${where}, ${rubricId}${used ? (used.type === "VIDEO" ? ", с видео" : ", с картинкой") : ""}):${topic ? `\nТема: ${topic}` : ""}${topicTag ? `\nТема Threads: ${topicTag}` : ""}\n\n${text}`);
     return res.json({ posted: true, channel: channel.id, project: project.id, rubric: rubricId, topic, media: used?.url, postId, text });
   } catch (e: any) {

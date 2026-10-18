@@ -16,23 +16,41 @@ export type Draft = {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const MSK_OFFSET_MS = 3 * 60 * 60 * 1000;
+
+/** Календарный день по Москве (UTC+3, без летнего времени), YYYY-MM-DD. */
+export function mskDay(now: Date): string {
+  return new Date(now.getTime() + MSK_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+/** Дневная рубрика ещё не выходила сегодня по МСК. Нет поля dailyRubric — всегда false. */
+export function dailyRubricPending(project: Project, dailyDoneDate: string | null, now: Date): boolean {
+  if (!project.dailyRubric) return false;
+  if (!project.rubrics.some((r) => r.id === project.dailyRubric)) return false;
+  return dailyDoneDate !== mskDay(now);
+}
 
 /** Рубрика по весам без повтора предыдущей на этом аккаунте.
  *  alternateRubric без alternateEveryDays — через пост.
  *  alternateEveryDays — не чаще раза в N суток: срок считается по всей истории проекта
- *  (allHistory, включая старые посты с другого аккаунта). Если срок вышел, следующий пост — эта рубрика. */
+ *  (allHistory, включая старые посты с другого аккаунта). Если срок вышел, следующий пост — эта рубрика.
+ *  dailyRubric — первый пост за календарные сутки МСК, если dailyDoneDate не равен сегодняшнему дню.
+ *  Трейлер при этом не сбрасывается: его срок смотрит только на посты своей рубрики и сработает на следующем запуске. */
 export function pickRubric(
   project: Project,
   history: HistoryItem[],
   now: Date,
   forcedRubric?: string,
   allHistory: HistoryItem[] = history,
+  dailyDoneDate: string | null = null,
 ): Rubric {
   const forced = project.rubrics.find((r) => r.id === forcedRubric);
   if (forced) return forced;
   const lastRubric = history.find((h) => h.project === project.id)?.rubric;
   const alt = project.rubrics.find((r) => r.id === project.alternateRubric);
-  const normal = () => pickWeighted(project.rubrics.filter((r) => r !== alt && r.weight > 0), lastRubric, (r) => r.id);
+  const daily = project.rubrics.find((r) => r.id === project.dailyRubric);
+  const normal = () => pickWeighted(project.rubrics.filter((r) => r !== alt && r !== daily && r.weight > 0), lastRubric, (r) => r.id);
+  if (daily && dailyRubricPending(project, dailyDoneDate, now)) return daily;
   if (!alt) return normal();
   const days = project.alternateEveryDays;
   if (days == null) return lastRubric !== alt.id ? alt : normal();
@@ -149,14 +167,16 @@ export async function makeDraft(opts: {
   forcedRubric?: string; // только для превью
   forcedTopic?: string; // только для превью: фрагмент названия темы
   now: Date;
+  /** МСК-дата последнего успешного поста dailyRubric. null — такого поста ещё не было. */
+  dailyDoneDate?: string | null;
 }): Promise<Draft> {
-  const { channel, history, lastProject, forcedProject, forcedRubric, forcedTopic, now } = opts;
+  const { channel, history, lastProject, forcedProject, forcedRubric, forcedTopic, now, dailyDoneDate = null } = opts;
   const project = pickProject(channel, lastProject, forcedProject);
 
   // «Не повторять прошлую рубрику» — по постам этого аккаунта. Интервал трейлера — по всей истории проекта.
   // Темы и антиповтор — тоже по всем аккаунтам, чтобы два аккаунта не выдавали одно и то же
   const own = history.filter((h) => (h.channel ?? "pomazkof") === channel.id);
-  const rubric = pickRubric(project, own, now, forcedRubric, history);
+  const rubric = pickRubric(project, own, now, forcedRubric, history, dailyDoneDate);
   const wanted = forcedTopic?.toLowerCase();
   const topic = (wanted && rubric.topics?.find((t) => t.toLowerCase().includes(wanted))) || pickTopic(rubric, history);
   const linkContent = `${channel.id}-${rubric.id}`;
