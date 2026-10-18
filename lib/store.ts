@@ -97,3 +97,19 @@ export async function getAppStoreDay(projectId: string): Promise<string | null> 
 export async function setAppStoreDay(projectId: string, mskDate: string) {
   await (await db()).set(appStoreDayKey(projectId), mskDate);
 }
+
+// Отдельный ключ на код: SET NX, поэтому повторно отметить опубликованный код нельзя.
+// Неудачная публикация сюда не пишет.
+const appStoreCodeKey = (projectId: string, code: string) => `threads:appstore_code:${projectId}:${code}`;
+
+export async function getAppStoreCodesUsed(projectId: string, codes: readonly string[]): Promise<string[]> {
+  if (!codes.length) return [];
+  const values = await (await db()).mGet(codes.map((code) => appStoreCodeKey(projectId, code)));
+  return codes.filter((_, i) => values[i] != null);
+}
+
+/** true — код отмечен сейчас. false — уже был отмечен раньше, повторно не пишем. */
+export async function markAppStoreCodeUsed(projectId: string, code: string): Promise<boolean> {
+  const res = await (await db()).set(appStoreCodeKey(projectId, code), new Date().toISOString(), { NX: true });
+  return res === "OK";
+}
