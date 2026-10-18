@@ -1,5 +1,5 @@
-import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, PROJECTS, pickWeighted, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
-import { detectiveRefProblem, draftPost, repeatedEnding, ruleCheck, tooSimilar, factCheck } from "./generate.js";
+import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, PROJECTS, pickWeighted, spentAppStoreCodes, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
+import { appStoreCodeProblem, appStoreMomentProblem, detectiveRefProblem, draftPost, repeatedEnding, ruleCheck, tooSimilar, factCheck } from "./generate.js";
 import type { HistoryItem } from "./store.js";
 import type { Channel } from "./channels.js";
 
@@ -13,26 +13,52 @@ export type Draft = {
   media?: Media;
   text: string | null; // null — ни один вариант не прошёл проверки
   rejected: string[];
+  promoCode?: string; // задан только у поста с кодом; превью его не списывает
+  promoLeft?: number; // сколько кодов останется после успешной публикации этого
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const MSK_OFFSET_MS = 3 * 60 * 60 * 1000;
+
+/** Календарный день по Москве (UTC+3, без летнего времени), YYYY-MM-DD. */
+export function mskDay(now: Date): string {
+  return new Date(now.getTime() + MSK_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+/** Дневная рубрика ещё не выходила сегодня по МСК. Нет поля dailyRubric — всегда false. */
+export function dailyRubricPending(project: Project, dailyDoneDate: string | null, now: Date): boolean {
+  if (!project.dailyRubric) return false;
+  if (!project.rubrics.some((r) => r.id === project.dailyRubric)) return false;
+  return dailyDoneDate !== mskDay(now);
+}
 
 /** Рубрика по весам без повтора предыдущей на этом аккаунте.
  *  alternateRubric без alternateEveryDays — через пост.
  *  alternateEveryDays — не чаще раза в N суток: срок считается по всей истории проекта
- *  (allHistory, включая старые посты с другого аккаунта). Если срок вышел, следующий пост — эта рубрика. */
+ *  (allHistory, включая старые посты с другого аккаунта). Если срок вышел, следующий пост — эта рубрика.
+ *  dailyRubric — первый пост за календарные сутки МСК, если dailyDoneDate не равен сегодняшнему дню.
+ *  Пока есть неиспользованный код App Store, этот слот — appstore-promo, иначе обычный appstore.
+ *  Трейлер при этом не сбрасывается: его срок смотрит только на посты своей рубрики и сработает на следующем запуске. */
 export function pickRubric(
   project: Project,
   history: HistoryItem[],
   now: Date,
   forcedRubric?: string,
   allHistory: HistoryItem[] = history,
+  dailyDoneDate: string | null = null,
+  appStorePromo = false,
 ): Rubric {
   const forced = project.rubrics.find((r) => r.id === forcedRubric);
   if (forced) return forced;
   const lastRubric = history.find((h) => h.project === project.id)?.rubric;
   const alt = project.rubrics.find((r) => r.id === project.alternateRubric);
-  const normal = () => pickWeighted(project.rubrics.filter((r) => r !== alt && r.weight > 0), lastRubric, (r) => r.id);
+  const daily = project.rubrics.find((r) => r.id === project.dailyRubric);
+  const promo = project.rubrics.find((r) => r.id === OLOID_APP_STORE_PROMO_RUBRIC);
+  const normal = () => pickWeighted(project.rubrics.filter((r) => r !== alt && r !== daily && r !== promo && r.weight > 0), lastRubric, (r) => r.id);
+  if (daily && dailyRubricPending(project, dailyDoneDate, now)) {
+    if (appStorePromo && promo) return promo;
+    return daily;
+  }
   if (!alt) return normal();
   const days = project.alternateEveryDays;
   if (days == null) return lastRubric !== alt.id ? alt : normal();
@@ -63,7 +89,11 @@ export function pickTopicTag(project: Project, rubric: Rubric, history: HistoryI
  *  Теги не совпали — всё равно кадр, тот, что дольше всех не встречался в истории.
  *  Кадры из последних 20 постов проекта не повторяем, пока остаётся другой. */
 export function pickPicture(project: Project, rubric: Rubric, topic: string | undefined, history: HistoryItem[]): Picture | undefined {
-  const pics = project.pictures;
+  const pics = project.pictures?.filter((p) => {
+    // Кадр замурованной комнаты и «олоид на ладони» в посты App Store не берём.
+    if (rubric.id !== "appstore" && rubric.id !== OLOID_APP_STORE_PROMO_RUBRIC) return true;
+    return !p.tags.includes("замуров") && !/скелет|на ладон/i.test(p.about);
+  });
   if (!rubric.withPicture || !pics?.length) return undefined;
   const own = history.filter((h) => h.project === project.id);
   const recent = new Set(own.slice(0, 20).map((h) => h.media));
@@ -149,14 +179,20 @@ export async function makeDraft(opts: {
   forcedRubric?: string; // только для превью
   forcedTopic?: string; // только для превью: фрагмент названия темы
   now: Date;
+  /** МСК-дата последнего успешного поста dailyRubric. null — такого поста ещё не было. */
+  dailyDoneDate?: string | null;
+  /** Уже выданные коды App Store. null — Redis недоступен, код не показываем. */
+  usedAppStoreCodes?: string[] | null;
 }): Promise<Draft> {
-  const { channel, history, lastProject, forcedProject, forcedRubric, forcedTopic, now } = opts;
+  const { channel, history, lastProject, forcedProject, forcedRubric, forcedTopic, now, dailyDoneDate = null, usedAppStoreCodes = null } = opts;
   const project = pickProject(channel, lastProject, forcedProject);
 
   // «Не повторять прошлую рубрику» — по постам этого аккаунта. Интервал трейлера — по всей истории проекта.
   // Темы и антиповтор — тоже по всем аккаунтам, чтобы два аккаунта не выдавали одно и то же
   const own = history.filter((h) => (h.channel ?? "pomazkof") === channel.id);
-  const rubric = pickRubric(project, own, now, forcedRubric, history);
+  const spent = project.id === "oloid" && usedAppStoreCodes !== null ? spentAppStoreCodes(usedAppStoreCodes, history) : [];
+  const nextCode = project.id === "oloid" && usedAppStoreCodes !== null ? nextAppStoreCode(spent) : null;
+  const rubric = pickRubric(project, own, now, forcedRubric, history, dailyDoneDate, nextCode != null);
   const wanted = forcedTopic?.toLowerCase();
   const topic = (wanted && rubric.topics?.find((t) => t.toLowerCase().includes(wanted))) || pickTopic(rubric, history);
   const linkContent = `${channel.id}-${rubric.id}`;
@@ -164,19 +200,28 @@ export async function makeDraft(opts: {
   const picture = rubric.media ? undefined : pickPicture(project, rubric, topic, history);
   const media: Media | undefined = rubric.media ?? (picture && { type: "IMAGE", url: picture.url });
   const detective = project.id === "buro" ? pickDetectiveRef(history, project.forceNextRef) : undefined;
-  const base = { project, rubricId: rubric.id, topic, topicTag, media };
+  const promoCode = rubric.id === OLOID_APP_STORE_PROMO_RUBRIC ? (nextCode ?? undefined) : undefined;
+  const promoLeft = promoCode ? OLOID_APP_STORE_CODES.length - spent.length - 1 : undefined;
+  const base = { project, rubricId: rubric.id, topic, topicTag, media, promoCode, promoLeft };
+
+  if (rubric.id === OLOID_APP_STORE_PROMO_RUBRIC && !promoCode) {
+    const why = usedAppStoreCodes === null ? "список кодов в Redis недоступен, код не показываю" : "коды App Store закончились";
+    return { ...base, text: null, rejected: [why] };
+  }
 
   let feedback: string | undefined;
   const rejected: string[] = [];
 
   for (let i = 0; i < MAX_ATTEMPTS; i++) {
-    const candidate = await draftPost(project, rubric, history, now, feedback, topic, channel.voiceNote, linkContent, picture?.about, detective?.hint);
+    const candidate = await draftPost(project, rubric, history, now, feedback, topic, channel.voiceNote, linkContent, picture?.about, detective?.hint, promoCode);
     const problem =
-      ruleCheck(candidate, project, now, rubric, linkContent) ??
+      ruleCheck(candidate, project, now, rubric, linkContent, promoCode) ??
+      appStoreCodeProblem(candidate, project.id, rubric.id, promoCode) ??
+      appStoreMomentProblem(candidate, project.id, rubric.id) ??
       (detective ? detectiveRefProblem(candidate, history, detective) : null) ??
       repeatedEnding(candidate, history, project.id) ??
       tooSimilar(candidate, history) ??
-      (await factCheck(candidate, project, picture?.about, now));
+      (await factCheck(candidate, project, picture?.about, now, { rubricId: rubric.id, promoCode }));
     if (!problem) return { ...base, text: candidate, rejected };
     feedback = problem;
     rejected.push(`${problem}: ${candidate}`);

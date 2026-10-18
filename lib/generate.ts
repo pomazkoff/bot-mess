@@ -1,10 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, factsFor, promoActive, type DetectiveRef, type Project, type Rubric } from "./projects.js";
+import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, factsFor, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC, oloidRedeemUrl, promoActive, redactAppStoreCodes, type DetectiveRef, type Project, type Rubric } from "./projects.js";
 import type { HistoryItem } from "./store.js";
 
 const client = new Anthropic(); // ANTHROPIC_API_KEY из env
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-5-5";
-const MAX_LEN = 450; // лимит Threads — 500 символов, держим запас (эмодзи считаются по байтам)
+// Лимит Threads — 500 символов поля text. Адрес считается целиком: Threads его не сокращает.
+// Эмодзи считаются по байтам UTF-8, поэтому держим запас и режем обычную длину на 450.
+const MAX_LEN = 450;
 // У Sonnet 5.5 thinking включён по умолчанию и расходует тот же max_tokens:
 // с маленьким лимитом ответ обрезается или приходит пустым.
 const MAX_TOKENS = 16000;
@@ -35,9 +37,15 @@ export async function draftPost(
   linkContent?: string, // utm_content: аккаунт-рубрика
   pictureNote?: string, // что на приложенной картинке
   detectiveHint?: string, // заданная мемная отсылка «Бюро» (стиль, не факт)
+  promoCode?: string, // один код только этого поста; в систему и в другие рубрики не попадает
 ) {
-  const link = (rubric.link ?? p.link)(now, linkContent);
-  const recent = history.filter((h) => h.project === p.id).slice(0, 12).map((h) => `— ${h.text}`).join("\n");
+  // У поста с кодом ссылка открывает App Store и подставляет этот код. У обычного App Store — страница приложения.
+  const link = promoCode ? oloidRedeemUrl(promoCode) : (rubric.link ?? p.link)(now, linkContent);
+  const recent = history
+    .filter((h) => h.project === p.id)
+    .slice(0, 12)
+    .map((h) => `— ${redactAppStoreCodes(h.text)}`)
+    .join("\n");
   const season = p.seasonalHint?.(now);
 
   const system = `Ты пишешь посты для Threads от лица автора проекта «${p.name}». Пишешь по-русски.
@@ -59,7 +67,8 @@ ${p.id === "buro" ? "\nМемная отсылка к детективному �
   const user = `Рубрика: ${rubric.brief}
 ${topic ? `Тема поста: ${topic}` : ""}
 ${pictureNote ? `К посту будет приложена картинка из игры: ${pictureNote}. Можно опереться на одну её деталь; не описывай картинку целиком, не пиши «на картинке» и не добавляй того, чего на ней нет.` : ""}
-${p.requireLink ? `Обязательно поставь в конце ссылку: ${link}` : rubric.id === "question" ? "Ссылку не ставь." : `Если уместно, поставь в конце ссылку: ${link}`}
+${p.requireLink ? `Обязательно поставь в конце ссылку ровно так, без изменений: ${link}` : rubric.id === "question" ? "Ссылку не ставь." : `Если уместно, поставь в конце ссылку ровно так, без изменений: ${link}`}
+${promoCode ? `Единственный код этого поста — вставь отдельной строкой ровно так, без изменений: ${promoCode}\nЭто одноразовая бесплатная загрузка в App Store: код вводят там же, забирает первый. Других кодов нет и выдумывать их нельзя. Код оставь и в тексте отдельной строкой, без ссылки вокруг: его копируют вручную. Коротко скажи, что нажатие на ссылку само подставит код в App Store. Призыв в конце своими словами: скачать, поиграть и оставить отзыв. Фразу «скачай — поиграй — оставь отзыв» не копируй. Цену не называй.` : ""}
 ${season ? `Сезонный повод (по желанию): ${season}` : ""}
 ${detectiveHint ? `Обязательная отсылка в этом посте (мем, не факт о проекте и не связь с фильмом): ${detectiveHint}` : ""}
 
@@ -83,14 +92,21 @@ ${feedback ? `\nПредыдущий вариант отклонён: ${feedback
 // Строчный стиль «Олоида»: первая буква поста, строки и фразы — строчная.
 // Имена собственные из короткого списка не трогаем. Середину фразы не переписываем.
 const OLOID_PROPER =
-  /^(?:олоид\p{L}*|егор\p{L}*|яковлев\p{L}*|disco|elysium|steam|android|ios|серафим\p{L}*|павловн\p{L}*|конюшенн\p{L}*|исаакиевск\p{L}*|зайчик\p{L}*|петербург(?:а|у|е|ом)?|санкт-петербург(?:а|у|е|ом)?|питер(?:а|у|е|ом)?|лиза|лизы|лизе|лизу|лизой|витя|вити|вите|витю|витей|тонет(?:а|у|е|ом)|vk)$/iu;
+  /^(?:олоид\p{L}*|егор\p{L}*|яковлев\p{L}*|disco|elysium|steam|android|ios|app|серафим\p{L}*|павловн\p{L}*|конюшенн\p{L}*|исаакиевск\p{L}*|зайчик\p{L}*|петербург(?:а|у|е|ом)?|санкт-петербург(?:а|у|е|ом)?|питер(?:а|у|е|ом)?|лиза|лизы|лизе|лизу|лизой|витя|вити|вите|витю|витей|тонет(?:а|у|е|ом)|vk)$/iu;
 
 export function lowercaseSentenceStarts(text: string): string {
   const urls: string[] = [];
-  const masked = text.replace(/https?:\/\/\S+/g, (u) => {
+  const codes: string[] = [];
+  let masked = text.replace(/https?:\/\/\S+/g, (u) => {
     urls.push(u);
     return `\uE000${urls.length - 1}\uE000`;
   });
+  if (OLOID_APP_STORE_CODES.length) {
+    masked = masked.replace(new RegExp(OLOID_APP_STORE_CODES.join("|"), "g"), (c) => {
+      codes.push(c);
+      return `\uE001${codes.length - 1}\uE001`;
+    });
+  }
   const fixed = masked.replace(
     /(^|[\n\r]|[.!?…]+[^\S\n]*)([«"„“']*)(\p{Lu})(\p{Lu}*)/gu,
     (full, lead: string, quotes: string, first: string, restCaps: string, offset: number, whole: string) => {
@@ -108,7 +124,9 @@ export function lowercaseSentenceStarts(text: string): string {
       return lead + quotes + first.toLowerCase() + restCaps;
     },
   );
-  return fixed.replace(/\uE000(\d+)\uE000/g, (_m, i: string) => urls[Number(i)]);
+  return fixed
+    .replace(/\uE000(\d+)\uE000/g, (_m, i: string) => urls[Number(i)])
+    .replace(/\uE001(\d+)\uE001/g, (_m, i: string) => codes[Number(i)]);
 }
 
 // «Олоид»: абзацы не режем. Подравниваем только вёрстку:
@@ -140,7 +158,7 @@ const BANNED = [
   /sex\s*tape/i, /секс[-\s]?тейп/iu, /(?<![\p{L}])порн/iu,
 ];
 
-export function ruleCheck(text: string, p: Project, now: Date, rubric?: Rubric, linkContent?: string): string | null {
+export function ruleCheck(text: string, p: Project, now: Date, rubric?: Rubric, linkContent?: string, promoCode?: string): string | null {
   if (!text) return "пустой текст";
   if (text.length > MAX_LEN) return `длина ${text.length} > ${MAX_LEN}`;
   if ((text.match(EMOJI) || []).length > 1) return "больше одного эмодзи";
@@ -151,9 +169,44 @@ export function ruleCheck(text: string, p: Project, now: Date, rubric?: Rubric, 
   }
   for (const re of p.stopList ?? []) if (re.test(text)) return `штамп ${re} — перепиши фразу целиком, не синонимом`;
   const urls = text.match(/https?:\/\/\S+/g) || [];
-  const allowed = (rubric?.link ?? p.link)(now, linkContent);
-  if (urls.some((u) => u.replace(/[.,)]+$/, "") !== allowed)) return "посторонняя или искажённая ссылка";
-  if (p.requireLink && urls.length === 0) return "нет обязательной ссылки на сайт";
+  // Белый список — ровно одна ссылка. Обычный App Store: страница приложения.
+  // Пост с кодом: https://apps.apple.com/redeem?code=<КОД> — открывает App Store и подставляет код.
+  const allowed = promoCode ? oloidRedeemUrl(promoCode) : (rubric?.link ?? p.link)(now, linkContent);
+  if (urls.some((u) => u.replace(/[.,)]+$/, "") !== allowed)) return `посторонняя или искажённая ссылка — вставь ровно эту: ${allowed}`;
+  if (p.requireLink && urls.length === 0) return "нет обязательной ссылки";
+  return null;
+}
+
+const APP_STORE_RUBRICS = new Set<string>([OLOID_APP_STORE_RUBRIC, OLOID_APP_STORE_PROMO_RUBRIC]);
+const EXCLUSIVE = /только[^.\n]{0,60}app store|app store[^.\n]{0,80}только|других платформ[^.\n]{0,40}не/i;
+
+/** Коды «Олоида»: в промо-посте ровно один заданный, в остальных постах — ни одного. «Бюро» не касается. */
+export function appStoreCodeProblem(text: string, projectId: string, rubricId: string, promoCode?: string): string | null {
+  if (projectId !== "oloid") return null;
+  const found = OLOID_APP_STORE_CODES.filter((c) => text.includes(c));
+  if (rubricId !== OLOID_APP_STORE_PROMO_RUBRIC) {
+    return found.length ? `промокод ${found[0]} в этом посте не нужен — убери его` : null;
+  }
+  if (!promoCode) return "промокод не задан";
+  const lines = text.split("\n").map((l) => l.trim());
+  if (!lines.includes(promoCode)) return `нет промокода ${promoCode} — вставь его ровно так, отдельной строкой`;
+  if (found.some((c) => c !== promoCode)) return "лишний промокод — оставь только заданный";
+  if (/500/.test(text)) return "в посте с кодом не называй цену 500 ₽: по коду загрузка бесплатная";
+  if (!/бесплатн/iu.test(text)) return "напиши, что код даёт бесплатную загрузку в App Store";
+  if (!/одноразов|первый/iu.test(text)) return "напиши, что код одноразовый и его забирает первый";
+  if (!/скач|загруз|поигра/iu.test(text) || !/отзыв|напиш|пару слов|как вам/iu.test(text))
+    return "призыв своими словами: скачать, поиграть и оставить отзыв";
+  if (!/(?:наж|тап)/iu.test(text) || !/(?:подстав|примен)/iu.test(text))
+    return "коротко скажи, что нажатие на ссылку подставит код в App Store";
+  return null;
+}
+
+/** Посты App Store: эксклюзив и без скелета / кадра на ладони. */
+export function appStoreMomentProblem(text: string, projectId: string, rubricId: string): string | null {
+  if (projectId !== "oloid" || !APP_STORE_RUBRICS.has(rubricId)) return null;
+  if (/скелет/iu.test(text)) return "скелет не упоминать";
+  if (/на\s+ладон/iu.test(text)) return "кадр с олоидом на ладони не описывать";
+  if (!EXCLUSIVE.test(text)) return "скажи, что пока «Олоид» вышел только в App Store и на других платформах релиза не было. Даты не обещай";
   return null;
 }
 
@@ -182,11 +235,12 @@ const ENDING_REPEAT = "концовка повторяет недавний по
 
 /** Последняя непустая строка без ссылки — концовка поста. */
 function lastNonLinkLine(text: string): string {
+  const codes = OLOID_APP_STORE_CODES as readonly string[];
   const lines = text
     .replace(/\r\n?/g, "\n")
     .split("\n")
     .map((line) => line.replace(/https?:\/\/\S+/g, "").trim())
-    .filter(Boolean);
+    .filter((line) => line && !codes.includes(line));
   return lines.at(-1) ?? "";
 }
 
@@ -233,7 +287,7 @@ function oloidEndingHint(projectId: string, history: HistoryItem[]): string {
   const lines = history
     .filter((h) => h.project === "oloid")
     .slice(0, OLOID_ENDING_LOOKBACK)
-    .map((h) => lastNonLinkLine(h.text))
+    .map((h) => lastNonLinkLine(redactAppStoreCodes(h.text)))
     .filter(Boolean);
   if (!lines.length) return "";
   return `Концовки недавних постов — последнюю строку так не заканчивай и близко не повторяй:\n${lines.map((e) => `— ${e}`).join("\n")}\n`;
@@ -273,10 +327,26 @@ export function tooSimilar(text: string, history: HistoryItem[]): string | null 
 
 // ---------- Фактчек вторым проходом ----------
 
-export async function factCheck(text: string, p: Project, pictureNote?: string, now = new Date()): Promise<string | null> {
+function appStoreFactNote(rubricId?: string, promoCode?: string): string {
+  if (rubricId !== OLOID_APP_STORE_RUBRIC && rubricId !== OLOID_APP_STORE_PROMO_RUBRIC) return "";
+  const common =
+    "Это пост рубрики App Store. Факт, не отклоняй: пока «Олоид» вышел только в App Store на iPhone и iPad, на других платформах релиза ещё не было. Даты других площадок обещать нельзя. Яркий момент из фактов и кадра (атмосфера, коммуналка, Петербург, живопись, озвучка, звук, механика) — можно. Отклоняй скелет, повороты сюжета, убийц, концовки, кадр «олоид на ладони» и имена, которых нет в фактах. Скелет в фактах есть, но в этом посте его быть не должно.\n";
+  if (rubricId === OLOID_APP_STORE_PROMO_RUBRIC && promoCode) {
+    return `${common}В этом посте один настоящий код бесплатной загрузки, ровно ${promoCode}: отдельной строкой в тексте и внутри ссылки. Ссылка ровно https://apps.apple.com/redeem?code=${promoCode} — официальная, она открывает App Store и подставляет этот код. Не отклоняй из-за этой ссылки и не требуй страницу apps.apple.com/ru/app/id6817809325. Фраза, что нажатие на ссылку подставит код, — верная. Загрузка по коду бесплатная, код одноразовый, забирает первый. Не отклоняй из-за этого кода, слова «бесплатно» про эту загрузку и призыва скачать, поиграть и оставить отзыв. Других кодов быть не должно. Цену в этом посте не требуй.\n`;
+  }
+  return `${common}Промокоды и бесплатную раздачу в этом посте отклоняй: это другой тип поста.\n`;
+}
+
+export async function factCheck(
+  text: string,
+  p: Project,
+  pictureNote?: string,
+  now = new Date(),
+  opts?: { rubricId?: string; promoCode?: string },
+): Promise<string | null> {
   const r = await askJson<{ ok: boolean; reason: string }>(
     `Ты строгий редактор-фактчекер. Проверь пост о проекте «${p.name}».
-${p.id === "oloid" ? "Строчные буквы (кроме имён собственных), один восклицательный знак в первой строке и короткие абзацы (одна-две связанные фразы на строке, не больше трёх; между абзацами пустая строка; ссылка отдельной строкой после пустой) — заданный стиль, не отклоняй из-за этого.\n" : ""}${p.id === "buro" ? `Отсылки к детективам — стиль и шутка, не факты о проекте. Допустимы только эти якоря, каждый своим героем:\n${BURO_DETECTIVE_REFS.map((ref) => `• ${ref.hint}`).join("\n")}\nНе отклоняй такую шутку, если она узнаваемая и не приписана чужому персонажу. Отклоняй, если пост утверждает, что сервис основан на фильме, снят по нему или связан с правообладателем, если цитата приписана не тому герою, если раскрыта развязка или описана жестокость, или если шутка непристойная.\n` : ""}Допустимые факты:
+${p.id === "oloid" ? "Строчные буквы (кроме имён собственных), один восклицательный знак в первой строке и короткие абзацы (одна-две связанные фразы на строке, не больше трёх; между абзацами пустая строка; ссылка отдельной строкой после пустой) — заданный стиль, не отклоняй из-за этого.\nСсылка на apps.apple.com/ru/app/id6817809325 — официальная страница «Олоида» в App Store. Если она стоит в посте, не отклоняй из-за неё: UTM нет специально. «Вышло на iOS / iPhone / iPad», «App Store» и цена 500 ₽ допустимы, когда они есть в фактах. Выход на VK Play, Android или Steam — нет.\n" : ""}${appStoreFactNote(opts?.rubricId, opts?.promoCode)}${p.id === "buro" ? `Отсылки к детективам — стиль и шутка, не факты о проекте. Допустимы только эти якоря, каждый своим героем:\n${BURO_DETECTIVE_REFS.map((ref) => `• ${ref.hint}`).join("\n")}\nНе отклоняй такую шутку, если она узнаваемая и не приписана чужому персонажу. Отклоняй, если пост утверждает, что сервис основан на фильме, снят по нему или связан с правообладателем, если цитата приписана не тому герою, если раскрыта развязка или описана жестокость, или если шутка непристойная.\n` : ""}Допустимые факты:
 ${factsFor(p, now).map((f) => `• ${f}`).join("\n")}
 Запрещено:
 ${p.forbidden.map((f) => `• ${f}`).join("\n")}
