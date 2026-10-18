@@ -9,7 +9,8 @@ import { channelById } from "../lib/channels.js";
 // Этот эндпоинт НЕ импортирует модуль публикации и ничего не пишет в историю —
 // утечка PREVIEW_KEY позволяет только тратить токены Anthropic, но не постить.
 // Вызов: /api/preview?key=<PREVIEW_KEY>[&channel=pomazkof|oloid]&project=buro|oloid[&rubric=<id рубрики>][&topic=<фрагмент темы>][&notify=1 — прислать превью в Telegram]
-// &rubric=appstore — обычный пост App Store. &rubric=appstore-promo — вариант с кодом (код не списывается).
+// &rubric=appstore — обычный пост App Store, ссылка на страницу приложения.
+// &rubric=appstore-promo — вариант с кодом: ссылка https://apps.apple.com/redeem?code=<КОД>, тот же код отдельной строкой в тексте. Код не списывается.
 // Без rubric бот сам берёт слот дня: промо, пока коды есть, иначе обычный App Store. Ключи Redis: threads:appstore_day:oloid и threads:appstore_code:oloid:<КОД>.
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const key = process.env.PREVIEW_KEY;

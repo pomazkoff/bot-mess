@@ -215,7 +215,7 @@ export async function makeDraft(opts: {
   for (let i = 0; i < MAX_ATTEMPTS; i++) {
     const candidate = await draftPost(project, rubric, history, now, feedback, topic, channel.voiceNote, linkContent, picture?.about, detective?.hint, promoCode);
     const problem =
-      ruleCheck(candidate, project, now, rubric, linkContent) ??
+      ruleCheck(candidate, project, now, rubric, linkContent, promoCode) ??
       appStoreCodeProblem(candidate, project.id, rubric.id, promoCode) ??
       appStoreMomentProblem(candidate, project.id, rubric.id) ??
       (detective ? detectiveRefProblem(candidate, history, detective) : null) ??

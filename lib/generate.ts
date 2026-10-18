@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, factsFor, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC, promoActive, redactAppStoreCodes, type DetectiveRef, type Project, type Rubric } from "./projects.js";
+import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, factsFor, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC, oloidRedeemUrl, promoActive, redactAppStoreCodes, type DetectiveRef, type Project, type Rubric } from "./projects.js";
 import type { HistoryItem } from "./store.js";
 
 const client = new Anthropic(); // ANTHROPIC_API_KEY из env
@@ -39,7 +39,8 @@ export async function draftPost(
   detectiveHint?: string, // заданная мемная отсылка «Бюро» (стиль, не факт)
   promoCode?: string, // один код только этого поста; в систему и в другие рубрики не попадает
 ) {
-  const link = (rubric.link ?? p.link)(now, linkContent);
+  // У поста с кодом ссылка открывает App Store и подставляет этот код. У обычного App Store — страница приложения.
+  const link = promoCode ? oloidRedeemUrl(promoCode) : (rubric.link ?? p.link)(now, linkContent);
   const recent = history
     .filter((h) => h.project === p.id)
     .slice(0, 12)
@@ -67,7 +68,7 @@ ${p.id === "buro" ? "\nМемная отсылка к детективному �
 ${topic ? `Тема поста: ${topic}` : ""}
 ${pictureNote ? `К посту будет приложена картинка из игры: ${pictureNote}. Можно опереться на одну её деталь; не описывай картинку целиком, не пиши «на картинке» и не добавляй того, чего на ней нет.` : ""}
 ${p.requireLink ? `Обязательно поставь в конце ссылку ровно так, без изменений: ${link}` : rubric.id === "question" ? "Ссылку не ставь." : `Если уместно, поставь в конце ссылку ровно так, без изменений: ${link}`}
-${promoCode ? `Единственный код этого поста — вставь отдельной строкой ровно так, без изменений: ${promoCode}\nЭто одноразовая бесплатная загрузка в App Store: код вводят там же, забирает первый. Других кодов нет и выдумывать их нельзя. Призыв в конце своими словами: скачать, поиграть и оставить отзыв. Фразу «скачай — поиграй — оставь отзыв» не копируй. Цену не называй.` : ""}
+${promoCode ? `Единственный код этого поста — вставь отдельной строкой ровно так, без изменений: ${promoCode}\nЭто одноразовая бесплатная загрузка в App Store: код вводят там же, забирает первый. Других кодов нет и выдумывать их нельзя. Код оставь и в тексте отдельной строкой, без ссылки вокруг: его копируют вручную. Коротко скажи, что нажатие на ссылку само подставит код в App Store. Призыв в конце своими словами: скачать, поиграть и оставить отзыв. Фразу «скачай — поиграй — оставь отзыв» не копируй. Цену не называй.` : ""}
 ${season ? `Сезонный повод (по желанию): ${season}` : ""}
 ${detectiveHint ? `Обязательная отсылка в этом посте (мем, не факт о проекте и не связь с фильмом): ${detectiveHint}` : ""}
 
@@ -157,7 +158,7 @@ const BANNED = [
   /sex\s*tape/i, /секс[-\s]?тейп/iu, /(?<![\p{L}])порн/iu,
 ];
 
-export function ruleCheck(text: string, p: Project, now: Date, rubric?: Rubric, linkContent?: string): string | null {
+export function ruleCheck(text: string, p: Project, now: Date, rubric?: Rubric, linkContent?: string, promoCode?: string): string | null {
   if (!text) return "пустой текст";
   if (text.length > MAX_LEN) return `длина ${text.length} > ${MAX_LEN}`;
   if ((text.match(EMOJI) || []).length > 1) return "больше одного эмодзи";
@@ -168,8 +169,9 @@ export function ruleCheck(text: string, p: Project, now: Date, rubric?: Rubric, 
   }
   for (const re of p.stopList ?? []) if (re.test(text)) return `штамп ${re} — перепиши фразу целиком, не синонимом`;
   const urls = text.match(/https?:\/\/\S+/g) || [];
-  // Белый список — ровно одна ссылка рубрики или проекта. У App Store это apps.apple.com без UTM.
-  const allowed = (rubric?.link ?? p.link)(now, linkContent);
+  // Белый список — ровно одна ссылка. Обычный App Store: страница приложения.
+  // Пост с кодом: https://apps.apple.com/redeem?code=<КОД> — открывает App Store и подставляет код.
+  const allowed = promoCode ? oloidRedeemUrl(promoCode) : (rubric?.link ?? p.link)(now, linkContent);
   if (urls.some((u) => u.replace(/[.,)]+$/, "") !== allowed)) return `посторонняя или искажённая ссылка — вставь ровно эту: ${allowed}`;
   if (p.requireLink && urls.length === 0) return "нет обязательной ссылки";
   return null;
@@ -194,6 +196,8 @@ export function appStoreCodeProblem(text: string, projectId: string, rubricId: s
   if (!/одноразов|первый/iu.test(text)) return "напиши, что код одноразовый и его забирает первый";
   if (!/скач|загруз|поигра/iu.test(text) || !/отзыв|напиш|пару слов|как вам/iu.test(text))
     return "призыв своими словами: скачать, поиграть и оставить отзыв";
+  if (!/(?:наж|тап)/iu.test(text) || !/(?:подстав|примен)/iu.test(text))
+    return "коротко скажи, что нажатие на ссылку подставит код в App Store";
   return null;
 }
 
@@ -328,7 +332,7 @@ function appStoreFactNote(rubricId?: string, promoCode?: string): string {
   const common =
     "Это пост рубрики App Store. Факт, не отклоняй: пока «Олоид» вышел только в App Store на iPhone и iPad, на других платформах релиза ещё не было. Даты других площадок обещать нельзя. Яркий момент из фактов и кадра (атмосфера, коммуналка, Петербург, живопись, озвучка, звук, механика) — можно. Отклоняй скелет, повороты сюжета, убийц, концовки, кадр «олоид на ладони» и имена, которых нет в фактах. Скелет в фактах есть, но в этом посте его быть не должно.\n";
   if (rubricId === OLOID_APP_STORE_PROMO_RUBRIC && promoCode) {
-    return `${common}В этом посте один настоящий код бесплатной загрузки, ровно ${promoCode}. Его вводят в App Store, загрузка по нему бесплатная, код одноразовый, забирает первый. Не отклоняй из-за этого кода, слова «бесплатно» про эту загрузку и призыва скачать, поиграть и оставить отзыв. Других кодов быть не должно. Цену в этом посте не требуй.\n`;
+    return `${common}В этом посте один настоящий код бесплатной загрузки, ровно ${promoCode}: отдельной строкой в тексте и внутри ссылки. Ссылка ровно https://apps.apple.com/redeem?code=${promoCode} — официальная, она открывает App Store и подставляет этот код. Не отклоняй из-за этой ссылки и не требуй страницу apps.apple.com/ru/app/id6817809325. Фраза, что нажатие на ссылку подставит код, — верная. Загрузка по коду бесплатная, код одноразовый, забирает первый. Не отклоняй из-за этого кода, слова «бесплатно» про эту загрузку и призыва скачать, поиграть и оставить отзыв. Других кодов быть не должно. Цену в этом посте не требуй.\n`;
   }
   return `${common}Промокоды и бесплатную раздачу в этом посте отклоняй: это другой тип поста.\n`;
 }
