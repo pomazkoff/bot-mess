@@ -1,4 +1,4 @@
-import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, PROJECTS, pickWeighted, spentAppStoreCodes, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
+import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_PROMO_UNTIL, PROJECTS, pickWeighted, spentAppStoreCodes, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
 import { appStoreCodeProblem, appStoreMomentProblem, detectiveRefProblem, draftPost, repeatedEnding, ruleCheck, tooSimilar, factCheck } from "./generate.js";
 import type { HistoryItem } from "./store.js";
 import type { Channel } from "./channels.js";
@@ -25,6 +25,18 @@ export function mskDay(now: Date): string {
   return new Date(now.getTime() + MSK_OFFSET_MS).toISOString().slice(0, 10);
 }
 
+/** Автоматическая раздача кодов ещё включена: календарный день МСК не позже promoUntil, включительно. */
+export function appStorePromoOpen(now: Date, until = OLOID_APP_STORE_PROMO_UNTIL): boolean {
+  return mskDay(now) <= until;
+}
+
+/** Код попадает только в appstore-promo. После promoUntil — только в явное превью этой рубрики, не в другие посты. */
+export function promoCodeForRubric(rubricId: string, nextCode: string | null, promoScheduled: boolean, forcedRubric?: string): string | undefined {
+  if (rubricId !== OLOID_APP_STORE_PROMO_RUBRIC) return undefined;
+  if (!promoScheduled && forcedRubric !== OLOID_APP_STORE_PROMO_RUBRIC) return undefined;
+  return nextCode ?? undefined;
+}
+
 /** Дневная рубрика ещё не выходила сегодня по МСК. Нет поля dailyRubric — всегда false. */
 export function dailyRubricPending(project: Project, dailyDoneDate: string | null, now: Date): boolean {
   if (!project.dailyRubric) return false;
@@ -37,7 +49,8 @@ export function dailyRubricPending(project: Project, dailyDoneDate: string | nul
  *  alternateEveryDays — не чаще раза в N суток: срок считается по всей истории проекта
  *  (allHistory, включая старые посты с другого аккаунта). Если срок вышел, следующий пост — эта рубрика.
  *  dailyRubric — первый пост за календарные сутки МСК, если dailyDoneDate не равен сегодняшнему дню.
- *  Пока есть неиспользованный код App Store, этот слот — appstore-promo, иначе обычный appstore.
+ *  appStorePromo — этот слот appstore-promo. Вызывающий передаёт true, только пока день МСК не позже
+ *  OLOID_APP_STORE_PROMO_UNTIL и есть неиспользованный код. Иначе слот — обычный appstore.
  *  Трейлер при этом не сбрасывается: его срок смотрит только на посты своей рубрики и сработает на следующем запуске. */
 export function pickRubric(
   project: Project,
@@ -190,9 +203,13 @@ export async function makeDraft(opts: {
   // «Не повторять прошлую рубрику» — по постам этого аккаунта. Интервал трейлера — по всей истории проекта.
   // Темы и антиповтор — тоже по всем аккаунтам, чтобы два аккаунта не выдавали одно и то же
   const own = history.filter((h) => (h.channel ?? "pomazkof") === channel.id);
-  const spent = project.id === "oloid" && usedAppStoreCodes !== null ? spentAppStoreCodes(usedAppStoreCodes, history) : [];
-  const nextCode = project.id === "oloid" && usedAppStoreCodes !== null ? nextAppStoreCode(spent) : null;
-  const rubric = pickRubric(project, own, now, forcedRubric, history, dailyDoneDate, nextCode != null);
+  const promoScheduled = appStorePromoOpen(now);
+  // Код читаем для автоматического слота, пока дата открыта, и для явного превью appstore-promo после неё.
+  const previewPromo = forcedRubric === OLOID_APP_STORE_PROMO_RUBRIC;
+  const canReadCodes = project.id === "oloid" && usedAppStoreCodes !== null;
+  const spent = canReadCodes ? spentAppStoreCodes(usedAppStoreCodes, history) : [];
+  const nextCode = canReadCodes && (promoScheduled || previewPromo) ? nextAppStoreCode(spent) : null;
+  const rubric = pickRubric(project, own, now, forcedRubric, history, dailyDoneDate, promoScheduled && nextCode != null);
   const wanted = forcedTopic?.toLowerCase();
   const topic = (wanted && rubric.topics?.find((t) => t.toLowerCase().includes(wanted))) || pickTopic(rubric, history);
   const linkContent = `${channel.id}-${rubric.id}`;
@@ -200,7 +217,7 @@ export async function makeDraft(opts: {
   const picture = rubric.media ? undefined : pickPicture(project, rubric, topic, history);
   const media: Media | undefined = rubric.media ?? (picture && { type: "IMAGE", url: picture.url });
   const detective = project.id === "buro" ? pickDetectiveRef(history, project.forceNextRef) : undefined;
-  const promoCode = rubric.id === OLOID_APP_STORE_PROMO_RUBRIC ? (nextCode ?? undefined) : undefined;
+  const promoCode = promoCodeForRubric(rubric.id, nextCode, promoScheduled, forcedRubric);
   const promoLeft = promoCode ? OLOID_APP_STORE_CODES.length - spent.length - 1 : undefined;
   const base = { project, rubricId: rubric.id, topic, topicTag, media, promoCode, promoLeft };
 
