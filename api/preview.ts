@@ -1,20 +1,37 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { makeDraft } from "../lib/run.js";
-import { OLOID_APP_STORE_CODES } from "../lib/projects.js";
+import { appStorePromoOpen, makeDraft } from "../lib/run.js";
+import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_UNTIL, spentAppStoreCodes } from "../lib/projects.js";
 import { getAppStoreCodesUsed, getAppStoreDay, getHistory, getLastProject } from "../lib/store.js";
 import { notify } from "../lib/notify.js";
 import { channelById } from "../lib/channels.js";
 
 // Холостой прогон: генерирует пост с полными проверками и возвращает текст.
 // Этот эндпоинт НЕ импортирует модуль публикации и ничего не пишет в историю —
-// утечка PREVIEW_KEY позволяет только тратить токены Anthropic, но не постить.
+// утечка PREVIEW_KEY позволяет тратить токены Anthropic и читать список кодов App Store, но не постить.
 // Вызов: /api/preview?key=<PREVIEW_KEY>[&channel=pomazkof|oloid]&project=buro|oloid[&rubric=<id рубрики>][&topic=<фрагмент темы>][&notify=1 — прислать превью в Telegram]
 // &rubric=appstore — обычный пост App Store, ссылка на страницу приложения.
-// &rubric=appstore-promo — вариант с кодом: ссылка https://apps.apple.com/redeem?code=<КОД>, тот же код отдельной строкой в тексте. Код не списывается.
-// Без rubric бот сам берёт слот дня: промо, пока коды есть, иначе обычный App Store. Ключи Redis: threads:appstore_day:oloid и threads:appstore_code:oloid:<КОД>.
+// &rubric=appstore-promo — вариант с кодом: ссылка https://apps.apple.com/redeem?code=<КОД>, тот же код отдельной строкой в тексте. Код не списывается. Дату раздачи не смотрит.
+// Без rubric бот сам берёт слот дня: appstore-promo, пока день МСК не позже OLOID_APP_STORE_PROMO_UNTIL и коды есть, иначе обычный App Store.
+// &codes=1 — без генерации: использованные и свободные коды (Redis + история). Ничего не списывает.
+// Ключи Redis: threads:appstore_day:oloid и threads:appstore_code:oloid:<КОД>.
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const key = process.env.PREVIEW_KEY;
   if (!key || req.query.key !== key) return res.status(401).json({ error: "unauthorized" });
+
+  // Список кодов не генерирует пост и не пишет в Redis. Канал не нужен: коды одни на проект oloid.
+  if (req.query.codes === "1") {
+    let redis = "ok";
+    const history = await getHistory(200).catch((e) => ((redis = String(e?.message ?? e)), null));
+    const redisUsed = await getAppStoreCodesUsed("oloid", OLOID_APP_STORE_CODES).catch((e) => ((redis = String(e?.message ?? e)), null));
+    const now = new Date();
+    if (history === null || redisUsed === null) {
+      return res.json({ codes: true, promoUntil: OLOID_APP_STORE_PROMO_UNTIL, promoOpen: appStorePromoOpen(now), redis, used: null, unused: null });
+    }
+    const used = spentAppStoreCodes(redisUsed, history);
+    const usedSet = new Set(used);
+    const unused = OLOID_APP_STORE_CODES.filter((c) => !usedSet.has(c));
+    return res.json({ codes: true, promoUntil: OLOID_APP_STORE_PROMO_UNTIL, promoOpen: appStorePromoOpen(now), redis, used, unused });
+  }
 
   const channel = channelById(typeof req.query.channel === "string" ? req.query.channel : undefined);
   if (!channel) return res.status(400).json({ error: "неизвестный channel" });

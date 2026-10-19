@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { makeDraft, mskDay } from "../lib/run.js";
+import { appStorePromoOpen, makeDraft, mskDay } from "../lib/run.js";
 import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC } from "../lib/projects.js";
 import { postAlreadyPublished, publishPost } from "../lib/threads.js";
 import { getAppStoreCodesUsed, getAppStoreDay, getHistory, getLastProject, markAppStoreCodeUsed, pushHistory, setAppStoreDay, setLastProject } from "../lib/store.js";
@@ -51,6 +51,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.json({ posted: false, channel: channel.id, project: project.id, rejected });
     }
     if (dry) return res.json({ dry: true, channel: channel.id, project: project.id, rubric: rubricId, topic, topicTag, media: media?.url, promoCode, promoLeft, text, rejected });
+
+    // После promoUntil код в Threads не публикуем, даже если генерация его собрала. В отчёт код не кладём.
+    if (promoCode && !appStorePromoOpen(now)) {
+      await notify(`⚠️ Threads-бот (${where}): раздача кодов App Store закрыта, пост с кодом не опубликован.`);
+      return res.json({ posted: false, channel: channel.id, project: project.id, rubric: rubricId, rejected: ["раздача кодов App Store закрыта"] });
+    }
 
     // Картинка — украшение: если Threads её не принял, публикуем текст без неё. Видео (трейлер) без файла не публикуем.
     let used = media;

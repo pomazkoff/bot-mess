@@ -39,8 +39,9 @@ export async function draftPost(
   detectiveHint?: string, // заданная мемная отсылка «Бюро» (стиль, не факт)
   promoCode?: string, // один код только этого поста; в систему и в другие рубрики не попадает
 ) {
-  // У поста с кодом ссылка открывает App Store и подставляет этот код. У обычного App Store — страница приложения.
-  const link = promoCode ? oloidRedeemUrl(promoCode) : (rubric.link ?? p.link)(now, linkContent);
+  // Код и redeem-ссылка — только у appstore-promo. В остальные рубрики код не попадает, даже если его передали.
+  const code = rubric.id === OLOID_APP_STORE_PROMO_RUBRIC ? promoCode : undefined;
+  const link = code ? oloidRedeemUrl(code) : (rubric.link ?? p.link)(now, linkContent);
   const recent = history
     .filter((h) => h.project === p.id)
     .slice(0, 12)
@@ -68,7 +69,7 @@ ${p.id === "buro" ? "\nМемная отсылка к детективному �
 ${topic ? `Тема поста: ${topic}` : ""}
 ${pictureNote ? `К посту будет приложена картинка из игры: ${pictureNote}. Можно опереться на одну её деталь; не описывай картинку целиком, не пиши «на картинке» и не добавляй того, чего на ней нет.` : ""}
 ${p.requireLink ? `Обязательно поставь в конце ссылку ровно так, без изменений: ${link}` : rubric.id === "question" ? "Ссылку не ставь." : `Если уместно, поставь в конце ссылку ровно так, без изменений: ${link}`}
-${promoCode ? `Единственный код этого поста — вставь отдельной строкой ровно так, без изменений: ${promoCode}\nЭто одноразовая бесплатная загрузка в App Store: код вводят там же, забирает первый. Других кодов нет и выдумывать их нельзя. Код оставь и в тексте отдельной строкой, без ссылки вокруг: его копируют вручную. Коротко скажи, что нажатие на ссылку само подставит код в App Store. Призыв в конце своими словами: скачать, поиграть и оставить отзыв. Фразу «скачай — поиграй — оставь отзыв» не копируй. Цену не называй.` : ""}
+${code ? `Единственный код этого поста — вставь отдельной строкой ровно так, без изменений: ${code}\nЭто одноразовая бесплатная загрузка в App Store: код вводят там же, забирает первый. Других кодов нет и выдумывать их нельзя. Код оставь и в тексте отдельной строкой, без ссылки вокруг: его копируют вручную. Коротко скажи, что нажатие на ссылку само подставит код в App Store. Призыв в конце своими словами: скачать, поиграть и оставить отзыв. Фразу «скачай — поиграй — оставь отзыв» не копируй. Цену не называй.` : ""}
 ${season ? `Сезонный повод (по желанию): ${season}` : ""}
 ${detectiveHint ? `Обязательная отсылка в этом посте (мем, не факт о проекте и не связь с фильмом): ${detectiveHint}` : ""}
 
@@ -170,8 +171,11 @@ export function ruleCheck(text: string, p: Project, now: Date, rubric?: Rubric, 
   for (const re of p.stopList ?? []) if (re.test(text)) return `штамп ${re} — перепиши фразу целиком, не синонимом`;
   const urls = text.match(/https?:\/\/\S+/g) || [];
   // Белый список — ровно одна ссылка. Обычный App Store: страница приложения.
-  // Пост с кодом: https://apps.apple.com/redeem?code=<КОД> — открывает App Store и подставляет код.
-  const allowed = promoCode ? oloidRedeemUrl(promoCode) : (rubric?.link ?? p.link)(now, linkContent);
+  // Redeem-ссылка разрешена только рубрике appstore-promo и только с заданным кодом. В остальные посты не пускаем.
+  const allowed =
+    rubric?.id === OLOID_APP_STORE_PROMO_RUBRIC && promoCode
+      ? oloidRedeemUrl(promoCode)
+      : (rubric?.link ?? p.link)(now, linkContent);
   if (urls.some((u) => u.replace(/[.,)]+$/, "") !== allowed)) return `посторонняя или искажённая ссылка — вставь ровно эту: ${allowed}`;
   if (p.requireLink && urls.length === 0) return "нет обязательной ссылки";
   return null;
