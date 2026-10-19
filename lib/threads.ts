@@ -70,18 +70,35 @@ async function containerStatus(containerId: string, token: string): Promise<{ st
 }
 
 async function recoverPublishedId(token: string, text: string): Promise<string | null> {
+  return findRecentPostByTextWithToken(token, text, 10 * 60 * 1000, "5");
+}
+
+/** Ищет пост с тем же текстом. maxAgeMs = null — без ограничения по времени (последние 25). */
+export async function findRecentPostByText(ch: Channel, text: string, maxAgeMs: number | null): Promise<string | null> {
+  const token = await ensureFreshToken(ch);
+  return findRecentPostByTextWithToken(token, text, maxAgeMs, "25");
+}
+
+async function findRecentPostByTextWithToken(
+  token: string,
+  text: string,
+  maxAgeMs: number | null,
+  limit: string,
+): Promise<string | null> {
   try {
-    const j = await call("GET", `/${USER}/threads`, { fields: "id,text,timestamp", limit: "5", access_token: token });
+    const j = await call("GET", `/${USER}/threads`, { fields: "id,text,timestamp", limit, access_token: token });
     const rows: { id?: string; text?: string; timestamp?: string }[] = Array.isArray(j?.data) ? j.data : [];
     const want = text.trim();
     const now = Date.now();
     const hit = rows.find((p) => {
       if (!p.id || p.text?.trim() !== want) return false;
+      if (maxAgeMs == null) return true;
       const at = Date.parse(p.timestamp ?? "");
-      return Number.isNaN(at) || now - at < 10 * 60 * 1000;
+      return Number.isNaN(at) || now - at < maxAgeMs;
     });
     return hit?.id ? String(hit.id) : null;
-  } catch {
+  } catch (e) {
+    if (maxAgeMs == null) throw e;
     return null;
   }
 }
