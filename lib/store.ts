@@ -113,3 +113,27 @@ export async function markAppStoreCodeUsed(projectId: string, code: string): Pro
   const res = await (await db()).set(appStoreCodeKey(projectId, code), new Date().toISOString(), { NX: true });
   return res === "OK";
 }
+
+// Заготовленный пост. Флаг ставится только после успешной публикации и не снимается.
+const scheduledKey = (id: string) => `threads:scheduled:${id}`;
+// Короткий замок на время публикации, чтобы два крона не создали два поста. Это не флаг успеха.
+const scheduledLockKey = (id: string) => `threads:scheduled:${id}:lock`;
+const SCHEDULED_LOCK_SEC = 16 * 60;
+
+export async function isScheduledPublished(id: string): Promise<boolean> {
+  return (await (await db()).exists(scheduledKey(id))) === 1;
+}
+
+export async function markScheduledPublished(id: string, postId: string): Promise<void> {
+  await (await db()).set(scheduledKey(id), JSON.stringify({ postId, at: new Date().toISOString() }));
+}
+
+/** true — замок наш. false — публикация этого id уже идёт в другом запуске. */
+export async function claimScheduled(id: string): Promise<boolean> {
+  const res = await (await db()).set(scheduledLockKey(id), new Date().toISOString(), { NX: true, EX: SCHEDULED_LOCK_SEC });
+  return res === "OK";
+}
+
+export async function releaseScheduledClaim(id: string): Promise<void> {
+  await (await db()).del(scheduledLockKey(id));
+}

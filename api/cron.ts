@@ -5,6 +5,7 @@ import { postAlreadyPublished, publishPost } from "../lib/threads.js";
 import { getAppStoreCodesUsed, getAppStoreDay, getHistory, getLastProject, markAppStoreCodeUsed, pushHistory, setAppStoreDay, setLastProject } from "../lib/store.js";
 import { notify } from "../lib/notify.js";
 import { channelById } from "../lib/channels.js";
+import { publishDueScheduled } from "../lib/scheduled.js";
 
 // Публикующий эндпоинт. Вызывается только Vercel Cron (заголовок Authorization: Bearer <CRON_SECRET>).
 // ?channel=<id> — аккаунт Threads из lib/channels.ts (по умолчанию pomazkof).
@@ -18,16 +19,72 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const channel = channelById(typeof req.query.channel === "string" ? req.query.channel : undefined);
   if (!channel) return res.status(400).json({ error: "неизвестный channel" });
   // Пауза отдельного аккаунта: PAUSED_<ID>=1 (например, PAUSED_OLOID), общая пауза — PAUSED.
-  // Кодовый выключатель channel.paused (сейчас @pomazkof): слот пропускается так же, без Telegram.
-  // Снять — убрать paused у канала в lib/channels.ts и задеплоить.
+  // Кодовый выключатель channel.paused (сейчас @pomazkof) глушит только сгенерированные посты.
+  // Заготовленный пост проверяется раньше и выходит даже при channel.paused.
+  // Снять паузу генерации — убрать paused у канала в lib/channels.ts и задеплоить.
   const channelPause = `PAUSED_${channel.id.toUpperCase()}`;
   if (process.env[channelPause]?.trim() === "1") return res.json({ skipped: `${channelPause}=1` });
-  if (channel.paused) return res.json({ skipped: `${channel.id} paused` });
-  // Аккаунт ещё не подключён — молча пропускаем, чтобы не слать ошибки в Telegram на каждом слоте
-  if (!process.env[channel.tokenEnv]?.trim()) return res.json({ skipped: `нет ${channel.tokenEnv}` });
 
   const dry = req.query.dry === "1" || process.env.DRY_RUN?.trim() === "1";
   const now = new Date();
+  try {
+    const scheduled = await publishDueScheduled(channel, now, dry);
+    if (scheduled.kind !== "none") {
+      const id = scheduled.post.id;
+      if (scheduled.kind === "dry") {
+        return res.json({
+          dry: true,
+          scheduled: id,
+          channel: channel.id,
+          topicTag: scheduled.post.topicTag,
+          media: scheduled.post.media.url,
+          length: scheduled.post.text.length,
+          text: scheduled.post.text,
+        });
+      }
+      if (scheduled.kind === "locked") return res.json({ skipped: "scheduled lock", scheduled: id, channel: channel.id });
+      if (scheduled.kind === "too-long") {
+        await notify(`⚠️ Threads-бот (${channel.name}): запланированный пост ${id} не опубликован, длина ${scheduled.length} > 500.`);
+        return res.json({ posted: false, scheduled: id, channel: channel.id, rejected: [`длина ${scheduled.length} > 500`] });
+      }
+      if (scheduled.kind === "failed") {
+        await notify(`❌ Threads-бот упал (${channel.name}, запланированный пост ${id}): ${scheduled.error}`);
+        return res.status(500).json({ error: scheduled.error, scheduled: id });
+      }
+      const mediaNote = scheduled.post.media.type === "VIDEO" ? ", с видео" : ", с картинкой";
+      const tag = scheduled.post.topicTag ? `\nТема Threads: ${scheduled.post.topicTag}` : "";
+      // В историю — чтобы пост попал в статистику. Рубрика scheduled не совпадает с рубриками генератора.
+      await pushHistory({
+        channel: channel.id,
+        project: channel.projects[0] ?? "scheduled",
+        rubric: "scheduled",
+        topic: id,
+        topicTag: scheduled.post.topicTag,
+        text: scheduled.post.text,
+        media: scheduled.post.media.url,
+        postId: scheduled.postId,
+        at: now.toISOString(),
+      }).catch((e) => console.error("history", e));
+      await notify(`✅ Опубликовано (запланированный пост, ${channel.name}, ${id}${mediaNote}):${tag}\n\n${scheduled.post.text}`);
+      return res.json({
+        posted: true,
+        scheduled: id,
+        channel: channel.id,
+        topicTag: scheduled.post.topicTag,
+        media: scheduled.post.media.url,
+        postId: scheduled.postId,
+        text: scheduled.post.text,
+      });
+    }
+  } catch (e: any) {
+    console.error(e);
+    await notify(`❌ Threads-бот упал (${channel.name}, запланированный пост): ${e?.message ?? e}`);
+    return res.status(500).json({ error: String(e?.message ?? e) });
+  }
+
+  if (channel.paused) return res.json({ skipped: `${channel.id} paused` });
+  // Аккаунт ещё не подключён — молча пропускаем, чтобы не слать ошибки в Telegram на каждом слоте
+  if (!process.env[channel.tokenEnv]?.trim()) return res.json({ skipped: `нет ${channel.tokenEnv}` });
 
   try {
     const history = await getHistory();
