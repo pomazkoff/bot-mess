@@ -1,4 +1,4 @@
-import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_PROMO_UNTIL, PROJECTS, pickWeighted, spentAppStoreCodes, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
+import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RUBRIC, PROJECTS, pickWeighted, spentAppStoreCodes, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
 import { appStoreCodeProblem, appStoreMomentProblem, detectiveRefProblem, draftPost, repeatedEnding, ruleCheck, tooSimilar, factCheck } from "./generate.js";
 import type { HistoryItem } from "./store.js";
 import type { Channel } from "./channels.js";
@@ -100,13 +100,11 @@ export function pickTopicTag(project: Project, rubric: Rubric, history: HistoryI
 
 /** Картинка к посту: лучшее совпадение тегов с рубрикой и темой.
  *  Теги не совпали — всё равно кадр, тот, что дольше всех не встречался в истории.
- *  Кадры из последних 20 постов проекта не повторяем, пока остаётся другой. */
+ *  Кадры из последних 20 постов проекта не повторяем, пока остаётся другой.
+ *  appstore и appstore-promo берут только appStorePictures. Остальные рубрики — pictures, без этих баннеров. */
 export function pickPicture(project: Project, rubric: Rubric, topic: string | undefined, history: HistoryItem[]): Picture | undefined {
-  const pics = project.pictures?.filter((p) => {
-    // Кадр замурованной комнаты и «олоид на ладони» в посты App Store не берём.
-    if (rubric.id !== "appstore" && rubric.id !== OLOID_APP_STORE_PROMO_RUBRIC) return true;
-    return !p.tags.includes("замуров") && !/скелет|на ладон/i.test(p.about);
-  });
+  const appStore = rubric.id === OLOID_APP_STORE_RUBRIC || rubric.id === OLOID_APP_STORE_PROMO_RUBRIC;
+  const pics = appStore ? project.appStorePictures : project.pictures;
   if (!rubric.withPicture || !pics?.length) return undefined;
   const own = history.filter((h) => h.project === project.id);
   const recent = new Set(own.slice(0, 20).map((h) => h.media));
