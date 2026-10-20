@@ -1,5 +1,5 @@
 import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RUBRIC, PROJECTS, pickWeighted, spentAppStoreCodes, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
-import { appStoreCodeProblem, appStoreMomentProblem, detectiveRefProblem, draftPost, repeatedEnding, ruleCheck, tooSimilar, factCheck } from "./generate.js";
+import { appStoreCodeProblem, appStoreMomentProblem, appStorePriceProblem, detectiveRefProblem, draftPost, repeatedEnding, ruleCheck, tooSimilar, factCheck } from "./generate.js";
 import type { HistoryItem } from "./store.js";
 import type { Channel } from "./channels.js";
 
@@ -232,6 +232,7 @@ export async function makeDraft(opts: {
     const problem =
       ruleCheck(candidate, project, now, rubric, linkContent, promoCode) ??
       appStoreCodeProblem(candidate, project.id, rubric.id, promoCode) ??
+      appStorePriceProblem(candidate, project.id, rubric.id) ??
       appStoreMomentProblem(candidate, project.id, rubric.id) ??
       (detective ? detectiveRefProblem(candidate, history, detective) : null) ??
       repeatedEnding(candidate, history, project.id) ??
