@@ -1,8 +1,8 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { appStorePromoOpen, makeDraft, mskDay } from "../lib/run.js";
-import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC } from "../lib/projects.js";
+import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC, OLOID_VKPLAY_RUBRIC } from "../lib/projects.js";
 import { postAlreadyPublished, publishPost } from "../lib/threads.js";
-import { getAppStoreCodesUsed, getAppStoreDay, getHistory, getLastProject, markAppStoreCodeUsed, pushHistory, setAppStoreDay, setLastProject } from "../lib/store.js";
+import { getAppStoreCodesUsed, getAppStoreDay, getHistory, getLastProject, getVkPlayDay, markAppStoreCodeUsed, pushHistory, setAppStoreDay, setLastProject, setVkPlayDay } from "../lib/store.js";
 import { notify } from "../lib/notify.js";
 import { channelById } from "../lib/channels.js";
 import { publishDueScheduled } from "../lib/scheduled.js";
@@ -90,6 +90,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const history = await getHistory();
     // null — App Store-поста ещё не было. Дата пишется ниже, только после успешной публикации.
     const dailyDoneDate = channel.projects.includes("oloid") ? await getAppStoreDay("oloid") : null;
+    const secondDailyDoneDate = channel.projects.includes("oloid") ? await getVkPlayDay("oloid") : null;
     const usedAppStoreCodes = channel.projects.includes("oloid") ? await getAppStoreCodesUsed("oloid", OLOID_APP_STORE_CODES) : [];
     const draft = await makeDraft({
       channel,
@@ -98,10 +99,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       forcedProject: typeof req.query.project === "string" ? req.query.project : undefined,
       now,
       dailyDoneDate,
+      secondDailyDoneDate,
       usedAppStoreCodes,
     });
-    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft } = draft;
+    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason } = draft;
     const where = `${channel.name} · ${project.name}`;
+
+    // Ссылка VK Play ещё заглушка: пост не генерируем и не публикуем. День закрываем, чтобы следующий слот суток не пропускался тоже.
+    if (skipReason) {
+      console.error(`Threads-бот (${where}): ${skipReason}`);
+      if (!dry) await notify(`⚠️ Threads-бот (${where}): ${skipReason}`);
+      // День закрываем после отчёта: следующий слот суток не пропускается тоже. Неудачная генерация сюда не пишет.
+      if (!dry && rubricId === OLOID_VKPLAY_RUBRIC) await setVkPlayDay(project.id, mskDay(now));
+      return res.json({ posted: false, skipped: skipReason, channel: channel.id, project: project.id, rubric: rubricId });
+    }
 
     if (!text) {
       if (!dry) await notify(`⚠️ Threads-бот (${where}): ни один вариант не прошёл проверки, пост пропущен.\n\n${rejected.join("\n\n")}`);
@@ -127,6 +138,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // День и код закрываем сразу после публикации, до истории: сбой записи в ленту не должен выдать код ещё раз.
     const appStoreSlot = rubricId === OLOID_APP_STORE_RUBRIC || rubricId === OLOID_APP_STORE_PROMO_RUBRIC;
     if (project.dailyRubric && appStoreSlot) await setAppStoreDay(project.id, mskDay(now));
+    if (rubricId === OLOID_VKPLAY_RUBRIC) await setVkPlayDay(project.id, mskDay(now));
     if (promoCode) await markAppStoreCodeUsed(project.id, promoCode);
     await pushHistory({ channel: channel.id, project: project.id, rubric: rubricId, topic, topicTag, text, media: used?.url, postId, at: now.toISOString() });
     await setLastProject(channel, project.id);
