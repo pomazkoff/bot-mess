@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, factsFor, forbiddenFor, mentionsPrice, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC, oloidRedeemUrl, promoActive, redactAppStoreCodes, type DetectiveRef, type Project, type Rubric } from "./projects.js";
+import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, factsFor, forbiddenFor, mentionsPrice, mskCalendarDay, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC, OLOID_VKPLAY_FROM, OLOID_VKPLAY_RUBRIC, oloidRedeemUrl, promoActive, redactAppStoreCodes, type DetectiveRef, type Project, type Rubric } from "./projects.js";
 import type { HistoryItem } from "./store.js";
 
 const client = new Anthropic(); // ANTHROPIC_API_KEY из env
@@ -58,7 +58,7 @@ ${voiceNote ? `\nАККАУНТ:\n${voiceNote}\n` : ""}
 ${factsFor(p, now, rubric.id).map((f) => `• ${f}`).join("\n")}
 
 ЗАПРЕЩЕНО:
-${forbiddenFor(p, rubric.id).map((f) => `• ${f}`).join("\n")}
+${forbiddenFor(p, rubric.id, now).map((f) => `• ${f}`).join("\n")}
 • Любые утверждения о проекте, которых нет в фактах. Если не уверен — не пиши.
 ${p.id === "buro" ? "\nМемная отсылка к детективному фильму, сериалу или персонажу — шутка в голосе, не утверждение о проекте. Цитату не выдавай за факт о «Бюро», не приписывай чужому герою и не намекай, что сервис сделан по этому фильму.\n" : ""}
 
@@ -182,7 +182,10 @@ export function ruleCheck(text: string, p: Project, now: Date, rubric?: Rubric, 
 }
 
 const APP_STORE_RUBRICS = new Set<string>([OLOID_APP_STORE_RUBRIC, OLOID_APP_STORE_PROMO_RUBRIC]);
-const EXCLUSIVE = /только[^.\n]{0,60}app store|app store[^.\n]{0,80}только|других платформ[^.\n]{0,40}не/i;
+const NO_PRICE_RUBRICS = new Set<string>([OLOID_APP_STORE_RUBRIC, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_VKPLAY_RUBRIC]);
+// Эксклюзив App Store: такие формулировки пост отклоняют. «Уже в App Store» и «на iPhone и iPad» без «только» — можно.
+const APP_STORE_EXCLUSIVITY =
+  /эксклюзив|ios[-\s]?only|только[^.\n]{0,50}(?:app\s*store|ios|iphone|ipad|айфон)|(?:app\s*store|ios)[^.\n]{0,60}только|других\s+платформ|других\s+площадк|больше\s+нигде|нигде\s+больше|единственн\p{L}*\s+(?:площадк|платформ)/iu;
 
 /** Коды «Олоида»: в промо-посте ровно один заданный, в остальных постах — ни одного. «Бюро» не касается. */
 export function appStoreCodeProblem(text: string, projectId: string, rubricId: string, promoCode?: string): string | null {
@@ -204,20 +207,43 @@ export function appStoreCodeProblem(text: string, projectId: string, rubricId: s
   return null;
 }
 
-/** Посты App Store: цена в тексте отклоняется и пост пишется заново. Код (цифры и латиница, без ₽) не цена. */
+/** Посты App Store и VK Play: цена в тексте отклоняется и пост пишется заново. Одно и то же правило mentionsPrice.
+ *  Код (цифры и латиница, без ₽) не цена. */
 export function appStorePriceProblem(text: string, projectId: string, rubricId: string): string | null {
-  if (projectId !== "oloid" || !APP_STORE_RUBRICS.has(rubricId)) return null;
+  if (projectId !== "oloid" || !NO_PRICE_RUBRICS.has(rubricId)) return null;
   // Код вырезаем до проверки: в нём цифры и буквы, знака ₽ нет, но так цифра кода не склеится с «р» из текста.
   if (mentionsPrice(redactAppStoreCodes(text))) return "Цену не упоминать";
   return null;
 }
 
-/** Посты App Store: эксклюзив и без скелета / кадра на ладони. */
+/** Посты App Store: без скелета / кадра на ладони и без эксклюзива. */
 export function appStoreMomentProblem(text: string, projectId: string, rubricId: string): string | null {
   if (projectId !== "oloid" || !APP_STORE_RUBRICS.has(rubricId)) return null;
   if (/скелет/iu.test(text)) return "скелет не упоминать";
   if (/на\s+ладон/iu.test(text)) return "кадр с олоидом на ладони не описывать";
-  if (!EXCLUSIVE.test(text)) return "скажи, что пока «Олоид» вышел только в App Store и на других платформах релиза не было. Даты не обещай";
+  if (APP_STORE_EXCLUSIVITY.test(text)) return "не пиши, что «Олоид» только в App Store, эксклюзив или что на других платформах релиза не было";
+  return null;
+}
+
+const VK_PLAY_MENTION = /vk\s*play|вк\s*плей|vkplay/iu;
+const VK_PLAY_HORROR = /хоррор|horror|ужастик|игра\s+ужасов/iu;
+const VK_PLAY_FIRE = /пожар|(?<![\p{L}])огон(?:ь|я|ю|ем|и)(?![\p{L}])/iu;
+const VK_PLAY_FINALE = /финал|концовк|развязк/iu;
+const VK_PLAY_AI = /нейросет|искусственн\p{L}*\s+интеллект|(?<![\p{L}])ии(?![\p{L}])|(?<![\p{L}])ai(?![\p{L}])/iu;
+const VK_PLAY_AI_ALLOWED = /ии использовался как инструмент/iu;
+
+/** Пост VK Play: новость о выходе, мистическая новелла, без хоррора, пожара, финала и цены. */
+export function vkPlayProblem(text: string, projectId: string, rubricId: string): string | null {
+  if (projectId !== "oloid" || rubricId !== OLOID_VKPLAY_RUBRIC) return null;
+  if (!VK_PLAY_MENTION.test(text)) return "прямо скажи, что «Олоид» вышел на VK Play";
+  if (!/мистич/iu.test(text) || !/новелл/iu.test(text)) return "назови «Олоид» мистической новеллой";
+  if (VK_PLAY_HORROR.test(text)) return "не называй «Олоид» хоррором: это мистическая новелла";
+  if (VK_PLAY_FIRE.test(text)) return "пожар и огонь не упоминать";
+  if (VK_PLAY_FINALE.test(text)) return "финал и концовку не упоминать";
+  if (/скелет/iu.test(text)) return "скелет не упоминать";
+  if (/на\s+ладон/iu.test(text)) return "кадр с олоидом на ладони не описывать";
+  const withoutAllowed = text.replace(new RegExp(VK_PLAY_AI_ALLOWED.source, "giu"), "");
+  if (VK_PLAY_AI.test(withoutAllowed)) return "про ИИ можно только фразу «ИИ использовался как инструмент»";
   return null;
 }
 
@@ -341,20 +367,32 @@ export function tooSimilar(text: string, history: HistoryItem[]): string | null 
 function appStoreFactNote(rubricId?: string, promoCode?: string): string {
   if (rubricId !== OLOID_APP_STORE_RUBRIC && rubricId !== OLOID_APP_STORE_PROMO_RUBRIC) return "";
   const common =
-    "Это пост рубрики App Store. Факт, не отклоняй: пока «Олоид» вышел только в App Store на iPhone и iPad, на других платформах релиза ещё не было. Даты других площадок обещать нельзя. Яркий момент из фактов и кадра (атмосфера, коммуналка, Петербург, живопись, озвучка, звук, механика) — можно. Отклоняй скелет, повороты сюжета, убийц, концовки, кадр «олоид на ладони» и имена, которых нет в фактах. Скелет в фактах есть, но в этом посте его быть не должно. Цену не упоминать. Если в посте есть цена — отклоняй.\n";
+    "Это пост рубрики App Store. Яркий момент из фактов и кадра (атмосфера, коммуналка, Петербург, живопись, озвучка, звук, механика) — можно. Отклоняй скелет, повороты сюжета, убийц, концовки, кадр «олоид на ладони» и имена, которых нет в фактах. Скелет в фактах есть, но в этом посте его быть не должно. Цену не упоминать. Если в посте есть цена — отклоняй. Отклоняй эксклюзив: «эксклюзив», «только в App Store», «только на iOS», «только на iPhone», «iOS-only», «на других платформах релиза не было».\n";
   if (rubricId === OLOID_APP_STORE_PROMO_RUBRIC && promoCode) {
     return `${common}В этом посте один настоящий код бесплатной загрузки, ровно ${promoCode}: отдельной строкой в тексте и внутри ссылки. Ссылка ровно https://apps.apple.com/redeem?code=${promoCode} — официальная, она открывает App Store и подставляет этот код. Не отклоняй из-за этой ссылки и не требуй страницу apps.apple.com/ru/app/id6817809325. Фраза, что нажатие на ссылку подставит код, — верная. Загрузка по коду бесплатная, код одноразовый, забирает первый. Не отклоняй из-за этого кода, слова «бесплатно» про эту загрузку и призыва скачать, поиграть и оставить отзыв. Других кодов быть не должно.\n`;
   }
   return `${common}Промокоды и бесплатную раздачу в этом посте отклоняй: это другой тип поста.\n`;
 }
 
-function oloidCheckNote(rubricId?: string): string {
+function vkPlayFactNote(rubricId?: string): string {
+  if (rubricId !== OLOID_VKPLAY_RUBRIC) return "";
+  return "Это пост рубрики VK Play. Факт, не отклоняй: «Олоид» вышел на VK Play. Ссылку в конце не отклоняй: это страница игры на VK Play, UTM нет специально. «Олоид» — мистическая визуальная новелла, не хоррор: «хоррор», horror и «ужастик» отклоняй. Пожар, огонь, финал, концовки, скелет, убийц и кадр «олоид на ладони» отклоняй. Яркий момент из фактов и кадра можно. Цену не упоминать. Если в посте есть цена — отклоняй. Про ИИ допустима только фраза «ИИ использовался как инструмент»; другие формулировки про нейросети отклоняй. Промокоды отклоняй.\n";
+}
+
+function oloidCheckNote(rubricId?: string, now = new Date()): string {
   const style =
     "Строчные буквы (кроме имён собственных), один восклицательный знак в первой строке и короткие абзацы (одна-две связанные фразы на строке, не больше трёх; между абзацами пустая строка; ссылка отдельной строкой после пустой) — заданный стиль, не отклоняй из-за этого.\nСсылка на apps.apple.com/ru/app/id6817809325 — официальная страница «Олоида» в App Store. Если она стоит в посте, не отклоняй из-за неё: UTM нет специально. ";
-  if (rubricId === OLOID_APP_STORE_RUBRIC || rubricId === OLOID_APP_STORE_PROMO_RUBRIC) {
-    return `${style}«Вышло на iOS / iPhone / iPad» и «App Store» допустимы, когда они есть в фактах. Выход на VK Play, Android или Steam — нет. Цену не упоминать. Если в посте есть цена — отклоняй.\n`;
+  if (rubricId === OLOID_VKPLAY_RUBRIC) {
+    return `${style}«Вышло на VK Play» — факт этого поста, не отклоняй. Выход на Android или Steam — нет. Цену не упоминать. Если в посте есть цена — отклоняй.\n`;
   }
-  return `${style}«Вышло на iOS / iPhone / iPad», «App Store» и цена 500 ₽ допустимы, когда они есть в фактах. Выход на VK Play, Android или Steam — нет.\n`;
+  if (rubricId === OLOID_APP_STORE_RUBRIC || rubricId === OLOID_APP_STORE_PROMO_RUBRIC) {
+    return `${style}«Вышло на iOS / iPhone / iPad» и «App Store» допустимы, когда они есть в фактах. «Эксклюзив», «только в App Store», «только на iOS», «iOS-only» и «на других платформах релиза не было» — отклоняй. Про VK Play в этом посте не пиши. Выход на Android или Steam — нет. Цену не упоминать. Если в посте есть цена — отклоняй.\n`;
+  }
+  const vkLine =
+    mskCalendarDay(now) >= OLOID_VKPLAY_FROM
+      ? "«Вышло на VK Play» допустимо: это факт. "
+      : "Выход на VK Play — нет. ";
+  return `${style}«Вышло на iOS / iPhone / iPad», «App Store» и цена 500 ₽ допустимы, когда они есть в фактах. ${vkLine}Выход на Android или Steam — нет.\n`;
 }
 
 export async function factCheck(
@@ -366,10 +404,10 @@ export async function factCheck(
 ): Promise<string | null> {
   const r = await askJson<{ ok: boolean; reason: string }>(
     `Ты строгий редактор-фактчекер. Проверь пост о проекте «${p.name}».
-${p.id === "oloid" ? oloidCheckNote(opts?.rubricId) : ""}${appStoreFactNote(opts?.rubricId, opts?.promoCode)}${p.id === "buro" ? `Отсылки к детективам — стиль и шутка, не факты о проекте. Допустимы только эти якоря, каждый своим героем:\n${BURO_DETECTIVE_REFS.map((ref) => `• ${ref.hint}`).join("\n")}\nНе отклоняй такую шутку, если она узнаваемая и не приписана чужому персонажу. Отклоняй, если пост утверждает, что сервис основан на фильме, снят по нему или связан с правообладателем, если цитата приписана не тому герою, если раскрыта развязка или описана жестокость, или если шутка непристойная.\n` : ""}Допустимые факты:
+${p.id === "oloid" ? oloidCheckNote(opts?.rubricId, now) : ""}${appStoreFactNote(opts?.rubricId, opts?.promoCode)}${vkPlayFactNote(opts?.rubricId)}${p.id === "buro" ? `Отсылки к детективам — стиль и шутка, не факты о проекте. Допустимы только эти якоря, каждый своим героем:\n${BURO_DETECTIVE_REFS.map((ref) => `• ${ref.hint}`).join("\n")}\nНе отклоняй такую шутку, если она узнаваемая и не приписана чужому персонажу. Отклоняй, если пост утверждает, что сервис основан на фильме, снят по нему или связан с правообладателем, если цитата приписана не тому герою, если раскрыта развязка или описана жестокость, или если шутка непристойная.\n` : ""}Допустимые факты:
 ${factsFor(p, now, opts?.rubricId).map((f) => `• ${f}`).join("\n")}
 Запрещено:
-${forbiddenFor(p, opts?.rubricId).map((f) => `• ${f}`).join("\n")}
+${forbiddenFor(p, opts?.rubricId, now).map((f) => `• ${f}`).join("\n")}
 ${pictureNote ? `\nК посту приложена картинка из игры: ${pictureNote}. Детали, которые на ней видны, допустимы.\n` : ""}
 Отклоняй, если в посте есть утверждение о проекте, которого нет в фактах (цифры, даты, цены, отзывы, истории клиентов, прогресс разработки), спойлер, или пост звучит как спам. Художественные образы и ирония без фактических утверждений допустимы.
 Ответь JSON: {"ok": true, "reason": ""} или {"ok": false, "reason": "кратко что не так"}`,

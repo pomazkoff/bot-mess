@@ -1,5 +1,5 @@
-import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RUBRIC, PROJECTS, pickWeighted, spentAppStoreCodes, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
-import { appStoreCodeProblem, appStoreMomentProblem, appStorePriceProblem, detectiveRefProblem, draftPost, repeatedEnding, ruleCheck, tooSimilar, factCheck } from "./generate.js";
+import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, mskCalendarDay, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RUBRIC, OLOID_VKPLAY_RUBRIC, OLOID_VKPLAY_SKIP_REASON, OLOID_VKPLAY_SLOT_HOUR_MSK, PROJECTS, pickWeighted, spentAppStoreCodes, vkPlayUrlBlocked, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
+import { appStoreCodeProblem, appStoreMomentProblem, appStorePriceProblem, detectiveRefProblem, draftPost, repeatedEnding, ruleCheck, tooSimilar, vkPlayProblem, factCheck } from "./generate.js";
 import type { HistoryItem } from "./store.js";
 import type { Channel } from "./channels.js";
 
@@ -15,6 +15,7 @@ export type Draft = {
   rejected: string[];
   promoCode?: string; // задан только у поста с кодом; превью его не списывает
   promoLeft?: number; // сколько кодов останется после успешной публикации этого
+  skipReason?: string; // слот не генерируем и не публикуем; причина для лога и Telegram
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -22,7 +23,12 @@ const MSK_OFFSET_MS = 3 * 60 * 60 * 1000;
 
 /** Календарный день по Москве (UTC+3, без летнего времени), YYYY-MM-DD. */
 export function mskDay(now: Date): string {
-  return new Date(now.getTime() + MSK_OFFSET_MS).toISOString().slice(0, 10);
+  return mskCalendarDay(now);
+}
+
+/** Час по Москве, 0–23. */
+export function mskHour(now: Date): number {
+  return new Date(now.getTime() + MSK_OFFSET_MS).getUTCHours();
 }
 
 /** Автоматическая раздача кодов ещё включена: календарный день МСК не позже promoUntil, включительно. */
@@ -44,6 +50,22 @@ export function dailyRubricPending(project: Project, dailyDoneDate: string | nul
   return dailyDoneDate !== mskDay(now);
 }
 
+/** Второй дневной пост берёт этот час. Заглушка в ссылке занимает только окно слота (5 часов), вечерний пост не съедает. */
+export function secondDailyClaimsHour(now: Date, hourMsk: number, urlBlocked: boolean): boolean {
+  const hour = mskHour(now);
+  if (hour < hourMsk) return false;
+  if (urlBlocked && hour >= hourMsk + 5) return false;
+  return true;
+}
+
+/** Второй дневной пост ещё не выходил сегодня и календарный день уже не раньше secondDailyFrom. */
+export function secondDailyPending(project: Project, doneDate: string | null, now: Date): boolean {
+  const id = project.secondDailyRubric;
+  if (!id || !project.rubrics.some((r) => r.id === id)) return false;
+  if (project.secondDailyFrom && mskDay(now) < project.secondDailyFrom) return false;
+  return doneDate !== mskDay(now);
+}
+
 /** Рубрика по весам без повтора предыдущей на этом аккаунте.
  *  alternateRubric без alternateEveryDays — через пост.
  *  alternateEveryDays — не чаще раза в N суток: срок считается по всей истории проекта
@@ -51,6 +73,8 @@ export function dailyRubricPending(project: Project, dailyDoneDate: string | nul
  *  dailyRubric — первый пост за календарные сутки МСК, если dailyDoneDate не равен сегодняшнему дню.
  *  appStorePromo — этот слот appstore-promo. Вызывающий передаёт true, только пока день МСК не позже
  *  OLOID_APP_STORE_PROMO_UNTIL и есть неиспользованный код. Иначе слот — обычный appstore.
+ *  secondDailyRubric — другой слот суток, не раньше secondDailyHourMsk, и только если dailyRubric за сегодня уже вышел.
+ *  До этого часа и пока дневной пост не опубликован поведение прежнее: утро остаётся за App Store.
  *  Трейлер при этом не сбрасывается: его срок смотрит только на посты своей рубрики и сработает на следующем запуске. */
 export function pickRubric(
   project: Project,
@@ -60,6 +84,7 @@ export function pickRubric(
   allHistory: HistoryItem[] = history,
   dailyDoneDate: string | null = null,
   appStorePromo = false,
+  secondDailyDoneDate: string | null = null,
 ): Rubric {
   const forced = project.rubrics.find((r) => r.id === forcedRubric);
   if (forced) return forced;
@@ -67,8 +92,23 @@ export function pickRubric(
   const alt = project.rubrics.find((r) => r.id === project.alternateRubric);
   const daily = project.rubrics.find((r) => r.id === project.dailyRubric);
   const promo = project.rubrics.find((r) => r.id === OLOID_APP_STORE_PROMO_RUBRIC);
-  const normal = () => pickWeighted(project.rubrics.filter((r) => r !== alt && r !== daily && r !== promo && r.weight > 0), lastRubric, (r) => r.id);
-  if (daily && dailyRubricPending(project, dailyDoneDate, now)) {
+  const second = project.rubrics.find((r) => r.id === project.secondDailyRubric);
+  const normal = () => pickWeighted(project.rubrics.filter((r) => r !== alt && r !== daily && r !== promo && r !== second && r.weight > 0), lastRubric, (r) => r.id);
+  const dailyPending = !!(daily && dailyRubricPending(project, dailyDoneDate, now));
+  const secondPending = !!(second && secondDailyPending(project, secondDailyDoneDate, now));
+  const afternoon = mskHour(now) >= (project.secondDailyHourMsk ?? OLOID_VKPLAY_SLOT_HOUR_MSK);
+  // Утро (до secondDailyHourMsk) второй дневной пост не занимает.
+  if (!afternoon) {
+    if (daily && dailyPending) {
+      if (appStorePromo && promo) return promo;
+      return daily;
+    }
+  } else if (second && secondPending && !dailyPending) {
+    // App Store за сегодня уже вышел — этот запуск берёт VK Play (обычно 15:00 МСК, иначе 20:00).
+    const blocked = second.id === OLOID_VKPLAY_RUBRIC && vkPlayUrlBlocked();
+    if (secondDailyClaimsHour(now, project.secondDailyHourMsk ?? OLOID_VKPLAY_SLOT_HOUR_MSK, blocked)) return second;
+  } else if (daily && dailyPending) {
+    // Утренний пост не вышел: слот по-прежнему его, VK Play ждёт следующего запуска.
     if (appStorePromo && promo) return promo;
     return daily;
   }
@@ -101,10 +141,12 @@ export function pickTopicTag(project: Project, rubric: Rubric, history: HistoryI
 /** Картинка к посту: лучшее совпадение тегов с рубрикой и темой.
  *  Теги не совпали — всё равно кадр, тот, что дольше всех не встречался в истории.
  *  Кадры из последних 20 постов проекта не повторяем, пока остаётся другой.
- *  appstore и appstore-promo берут только appStorePictures. Остальные рубрики — pictures, без этих баннеров. */
+ *  appstore и appstore-promo берут только appStorePictures.
+ *  vkplay берёт только vkPlayPictures. Остальные рубрики — pictures, без этих баннеров. */
 export function pickPicture(project: Project, rubric: Rubric, topic: string | undefined, history: HistoryItem[]): Picture | undefined {
   const appStore = rubric.id === OLOID_APP_STORE_RUBRIC || rubric.id === OLOID_APP_STORE_PROMO_RUBRIC;
-  const pics = appStore ? project.appStorePictures : project.pictures;
+  const vkPlay = rubric.id === OLOID_VKPLAY_RUBRIC;
+  const pics = appStore ? project.appStorePictures : vkPlay ? project.vkPlayPictures : project.pictures;
   if (!rubric.withPicture || !pics?.length) return undefined;
   const own = history.filter((h) => h.project === project.id);
   const recent = new Set(own.slice(0, 20).map((h) => h.media));
@@ -192,10 +234,12 @@ export async function makeDraft(opts: {
   now: Date;
   /** МСК-дата последнего успешного поста dailyRubric. null — такого поста ещё не было. */
   dailyDoneDate?: string | null;
+  /** МСК-дата последнего закрытого поста secondDailyRubric. null — такого поста ещё не было. */
+  secondDailyDoneDate?: string | null;
   /** Уже выданные коды App Store. null — Redis недоступен, код не показываем. */
   usedAppStoreCodes?: string[] | null;
 }): Promise<Draft> {
-  const { channel, history, lastProject, forcedProject, forcedRubric, forcedTopic, now, dailyDoneDate = null, usedAppStoreCodes = null } = opts;
+  const { channel, history, lastProject, forcedProject, forcedRubric, forcedTopic, now, dailyDoneDate = null, secondDailyDoneDate = null, usedAppStoreCodes = null } = opts;
   const project = pickProject(channel, lastProject, forcedProject);
 
   // «Не повторять прошлую рубрику» — по постам этого аккаунта. Интервал трейлера — по всей истории проекта.
@@ -207,11 +251,15 @@ export async function makeDraft(opts: {
   const canReadCodes = project.id === "oloid" && usedAppStoreCodes !== null;
   const spent = canReadCodes ? spentAppStoreCodes(usedAppStoreCodes, history) : [];
   const nextCode = canReadCodes && (promoScheduled || previewPromo) ? nextAppStoreCode(spent) : null;
-  const rubric = pickRubric(project, own, now, forcedRubric, history, dailyDoneDate, promoScheduled && nextCode != null);
+  const rubric = pickRubric(project, own, now, forcedRubric, history, dailyDoneDate, promoScheduled && nextCode != null, secondDailyDoneDate);
   const wanted = forcedTopic?.toLowerCase();
   const topic = (wanted && rubric.topics?.find((t) => t.toLowerCase().includes(wanted))) || pickTopic(rubric, history);
   const linkContent = `${channel.id}-${rubric.id}`;
   const topicTag = pickTopicTag(project, rubric, history);
+  // Заглушка в адресе: автоматический слот не генерируем и не публикуем. Явное превью рубрики текст всё же собирает.
+  if (rubric.id === OLOID_VKPLAY_RUBRIC && vkPlayUrlBlocked() && forcedRubric !== OLOID_VKPLAY_RUBRIC) {
+    return { project, rubricId: rubric.id, topic, topicTag, text: null, rejected: [OLOID_VKPLAY_SKIP_REASON], skipReason: OLOID_VKPLAY_SKIP_REASON };
+  }
   const picture = rubric.media ? undefined : pickPicture(project, rubric, topic, history);
   const media: Media | undefined = rubric.media ?? (picture && { type: "IMAGE", url: picture.url });
   const detective = project.id === "buro" ? pickDetectiveRef(history, project.forceNextRef) : undefined;
@@ -234,6 +282,7 @@ export async function makeDraft(opts: {
       appStoreCodeProblem(candidate, project.id, rubric.id, promoCode) ??
       appStorePriceProblem(candidate, project.id, rubric.id) ??
       appStoreMomentProblem(candidate, project.id, rubric.id) ??
+      vkPlayProblem(candidate, project.id, rubric.id) ??
       (detective ? detectiveRefProblem(candidate, history, detective) : null) ??
       repeatedEnding(candidate, history, project.id) ??
       tooSimilar(candidate, history) ??

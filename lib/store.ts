@@ -98,6 +98,17 @@ export async function setAppStoreDay(projectId: string, mskDate: string) {
   await (await db()).set(appStoreDayKey(projectId), mskDate);
 }
 
+// МСК-дата, на которую слот VK Play уже закрыт: успешный пост или пропуск из-за TODO в ссылке.
+const vkPlayDayKey = (projectId: string) => `threads:vkplay_day:${projectId}`;
+
+export async function getVkPlayDay(projectId: string): Promise<string | null> {
+  return (await db()).get(vkPlayDayKey(projectId));
+}
+
+export async function setVkPlayDay(projectId: string, mskDate: string) {
+  await (await db()).set(vkPlayDayKey(projectId), mskDate);
+}
+
 // Отдельный ключ на код: SET NX, поэтому повторно отметить опубликованный код нельзя.
 // Неудачная публикация сюда не пишет.
 const appStoreCodeKey = (projectId: string, code: string) => `threads:appstore_code:${projectId}:${code}`;

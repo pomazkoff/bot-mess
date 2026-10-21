@@ -34,9 +34,13 @@ export type Project = {
   alternateRubric?: string; // рубрика-посев (например, трейлер)
   alternateEveryDays?: number; // не чаще раза в N суток (72 часа × N/3) с прошлого поста этой рубрики; без поля — через пост
   dailyRubric?: string; // первый пост за календарные сутки МСК (после успешной публикации). Убрать поле — выключить
+  secondDailyRubric?: string; // второй пост за сутки МСК, в более позднем слоте, чем dailyRubric. Убрать поле — выключить
+  secondDailyFrom?: string; // с этого календарного дня МСК включительно; без поля — сразу
+  secondDailyHourMsk?: number; // не раньше этого часа МСК: утренний слот остаётся у dailyRubric
   promo?: Promo; // промокод: попадает в факты, пока действует, и только в разрешённые рубрики
-  pictures?: Picture[]; // одобренные Ильёй кадры (public/media/), без спойлеров. Рубрики appstore их не берут
+  pictures?: Picture[]; // одобренные Ильёй кадры (public/media/), без спойлеров. Рубрики appstore и vkplay их не берут
   appStorePictures?: Picture[]; // промо-баннеры только для appstore и appstore-promo; в остальные рубрики не попадают
+  vkPlayPictures?: Picture[]; // промо-баннеры только для vkplay; в остальные рубрики не попадают
   stopList?: RegExp[]; // штампы, которые отклоняются механически (вдобавок к общим запретам)
   seasonalHint?: (date: Date) => string | null;
   forceNextRef?: string; // id из BURO_DETECTIVE_REFS: один следующий пост. Удалить после публикации
@@ -59,6 +63,37 @@ export function oloidRedeemUrl(code: string): string {
 
 export const OLOID_APP_STORE_RUBRIC = "appstore";
 export const OLOID_APP_STORE_PROMO_RUBRIC = "appstore-promo";
+
+// Страница «Олоида» на VK Play. Других копий адреса нет.
+// Если в константу снова попадёт TODO, крон пост этой рубрики не публикует.
+export const OLOID_VKPLAY_URL = "https://vkplay.ru/play/game/oloid-50004";
+export const OLOID_VKPLAY_RUBRIC = "vkplay";
+/** Первый календарный день МСК, когда автоматический пост VK Play вообще возможен. До этой даты слота нет. */
+export const OLOID_VKPLAY_FROM = "2026-10-23";
+/** Час МСК слота VK Play (крон `0 12 * * *` UTC = 15:00 МСК). Утро 10:00 остаётся за App Store. */
+export const OLOID_VKPLAY_SLOT_HOUR_MSK = 15;
+export const OLOID_VKPLAY_SOON_FACT = "VK Play — скоро, даты выхода нет.";
+export const OLOID_VKPLAY_OUT_FACT = "«Олоид» вышел на VK Play.";
+export const OLOID_VKPLAY_SKIP_REASON =
+  "пост VK Play пропущен: в OLOID_VKPLAY_URL всё ещё TODO, страница игры на VK Play не задана";
+
+/** Календарный день по Москве, YYYY-MM-DD. Тот же расчёт, что у mskDay в lib/run.ts. */
+export function mskCalendarDay(now = new Date()): string {
+  return new Date(now.getTime() + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+export function vkPlayUrlBlocked(url = OLOID_VKPLAY_URL): boolean {
+  return url.toUpperCase().includes("TODO");
+}
+
+// Площадки в запретах. В массиве проекта лежит формулировка «VK Play ещё не вышел»;
+// forbiddenFor подменяет её по дате и рубрике. Цена в тексте этой строки снимается отдельно для постов без цены.
+const OLOID_PLATFORM_FORBIDDEN =
+  "Не писать, что игра уже вышла на VK Play, Android или Steam. Дат этих площадок нет — не называй их. Цену называть только 500 ₽ (App Store, iOS); другие цены не выдумывать. Языки локализации не называть: их нет в фактах.";
+const OLOID_PLATFORM_FORBIDDEN_VK_OUT =
+  "Не писать, что игра уже вышла на Android или Steam. Дат этих площадок нет — не называй их. «Олоид» на VK Play уже вышел — это можно. Цену называть только 500 ₽ (App Store, iOS); другие цены не выдумывать. Языки локализации не называть: их нет в фактах.";
+const OLOID_APP_STORE_PLATFORM_FORBIDDEN =
+  "Не пиши про VK Play. Не пиши, что игра уже вышла на Android или Steam, и не называй даты этих площадок. Не пиши «эксклюзив», «только в App Store», «только на iOS», «только на iPhone», «только для iPad», «iOS-only» и что на других платформах релиза не было. Цену не упоминать. Языки локализации не называть: их нет в фактах.";
 
 // Последний день раздачи кодов по Москве, включительно. С 2026-10-20 автоматический слот дня —
 // обычный appstore без кода и со ссылкой на страницу приложения. Коды и ключи Redis не удалять:
@@ -248,6 +283,17 @@ export const PROJECTS: Project[] = [
       { url: "https://threads-autopost-six.vercel.app/media/oloid/06_alik_vhodit_v_bar.jpg", about: "мужчина открывает дверь подвального бара: кирпичный свод, тёплый свет", tags: ["бар","рюмочн","двер","вечер","друз","город"] },
       { url: "https://threads-autopost-six.vercel.app/media/oloid/07_v_mashine.jpg", about: "салон машины на петербургской улице: двое впереди, мокрый асфальт, доходные дома", tags: ["машин","улиц","петербург","город","2018"] },
     ],
+    // Промо-баннеры 1280×720 только для постов VK Play. На кадре логотип OLOID, «Уже в VK Play» и значок VK Play.
+    // В остальные рубрики не попадают. Описания для модели: без имён, которых нет в фактах (Егор можно), без спойлеров.
+    // Учреждение на 03 не называть психбольницей — в фактах этого нет.
+    vkPlayPictures: [
+      { url: "https://threads-autopost-six.vercel.app/media/oloid/vkplay/00_dvor.jpg", about: "петербургский двор-колодец днём: жёлтые стены доходного дома, бельё на верёвках, лужи, мальчик у арки", tags: [] },
+      { url: "https://threads-autopost-six.vercel.app/media/oloid/vkplay/01_kommunalka.jpg", about: "обшарпанная комната коммуналки с люстрой, мешками и красным диваном; пожилая женщина в полосатом платье и мальчик", tags: [] },
+      { url: "https://threads-autopost-six.vercel.app/media/oloid/vkplay/02_bar.jpg", about: "подвальная рюмочная под кирпичным сводом, Егор и улыбчивый парень в водолазке", tags: [] },
+      { url: "https://threads-autopost-six.vercel.app/media/oloid/vkplay/03_psych.jpg", about: "дождливая аллея и ворота старого учреждения, девушка и мужчина с папкой", tags: [] },
+      { url: "https://threads-autopost-six.vercel.app/media/oloid/vkplay/04_secret_room.jpg", about: "тёмная комната с кирпичными стенами и железной кроватью, Егор и девушка", tags: [] },
+      { url: "https://threads-autopost-six.vercel.app/media/oloid/vkplay/05_kitchen.jpg", about: "общая кухня коммуналки с кастрюлями и клеёнкой на столе, девушка и мальчик", tags: [] },
+    ],
     // Промо-баннеры 1280×720 для постов App Store (набор 5). На кадре логотип OLOID, «Уже в App Store» и значок App Store.
     // Только appstore и appstore-promo. Описания для модели: без имён, которых нет в фактах (Егор можно), без спойлеров.
     // Учреждение на 03 не называть психбольницей — в фактах этого нет.
@@ -286,9 +332,9 @@ export const PROJECTS: Project[] = [
       // Илья, 2026-10-20
       "Прохождение занимает около 2–3 часов.",
       "«Олоид» вышел на iOS в октябре 2026 года и доступен в App Store на iPhone и iPad.",
-      "Пока «Олоид» вышел только в App Store — на других платформах релиза ещё не было.",
       "Цена в App Store — 500 ₽.",
-      "VK Play — скоро, даты выхода нет. Android в разработке. Steam не решён, страница в Steam не опубликована.",
+      OLOID_VKPLAY_SOON_FACT,
+      "Android в разработке. Steam не решён, страница в Steam не опубликована.",
       "Визуальный ориентир — Disco Elysium.",
       "У игры есть сайт oloid-game.ru.",
       "Вышел трейлер «Олоида», его можно посмотреть на сайте oloid-game.ru.",
@@ -318,7 +364,7 @@ export const PROJECTS: Project[] = [
       "Природа артефакта «олоид», путешествия во времени, ритуал, разгадки убийств — это спойлеры.",
       "Выборы игрока, их влияние, концовки, достижения, скрытые находки и пасхалки (в том числе знак «Олоида» в мини-игре) — не упоминать.",
       "В мини-игре — не упоминать годы соседей и то, что они друг друга не видят; только «три соседа живут в разных веках».",
-      "Не писать, что игра уже вышла на VK Play, Android или Steam. Дат этих площадок нет — не называй их. Цену называть только 500 ₽ (App Store, iOS); другие цены не выдумывать. Языки локализации не называть: их нет в фактах.",
+      OLOID_PLATFORM_FORBIDDEN,
       "«Нарисовано маслом», «живопись маслом» — только «в стиле масляной живописи».",
       "Выдуманный прогресс разработки и выдуманные эпизоды («готово 80%», «вчера записали озвучку» и т. п.). Рассказывать можно только эпизоды из фактов. Внутренние провалы (откаты, поломки сохранений) — не упоминать.",
       "Выдуманные исторические факты о реальных событиях 1898/1946/1993 годов.",
@@ -434,7 +480,7 @@ export const PROJECTS: Project[] = [
           "Пост про игру в App Store, не общий пост проекта. Правила этой рубрики отдельные.",
           "Один яркий момент без спойлеров, только из фактов и описания приложенного кадра: атмосфера, коммуналка, Петербург, визуал в стиле масляной живописи, озвучка актёров, звук, механика вроде «стол тащат рывками».",
           "Нельзя: повороты сюжета, кто убийца, концовки, скелет, что нашли за обоями, кадр «олоид на ладони», имена, которых нет в фактах.",
-          "Прямо скажи, что пока «Олоид» вышел только в App Store на iPhone и iPad, на других платформах релиза ещё не было. Даты VK Play, Android и Steam не обещай.",
+          "Можно сказать, что «Олоид» есть в App Store на iPhone и iPad. Не пиши «эксклюзив», «только в App Store», «только на iOS» и что на других платформах релиза не было. Про VK Play, Android и Steam в этом посте не пиши.",
           "Промокоды и бесплатную раздачу не упоминай. Цену не упоминать.",
           "Ссылку в конце вставь символ в символ, без UTM. Последняя строка перед ссылкой — короткое приглашение или вопрос новыми словами; не повторяй концовки недавних постов.",
         ].join(" "),
@@ -443,11 +489,11 @@ export const PROJECTS: Project[] = [
           "Яркий момент: визуал в стиле масляной живописи",
           "Яркий момент: звук и озвучка актёров, лучше в наушниках",
           "Яркий момент: стол тащат рывками, а не кликом",
-          "Пока только App Store на iPhone и iPad",
+          "Уже в App Store на iPhone и iPad",
           "Кому зайдёт: медленный мистический детектив",
         ],
       },
-      // Те же правила яркого момента и эксклюзива, плюс один одноразовый код. Код в бриф не кладём — его подставляет код.
+      // Те же правила яркого момента, без эксклюзива, плюс один одноразовый код. Код в бриф не кладём — его подставляет код.
       {
         id: "appstore-promo",
         weight: 0,
@@ -458,7 +504,7 @@ export const PROJECTS: Project[] = [
           "Пост про игру в App Store с одним кодом на бесплатную загрузку. Правила этой рубрики отдельные.",
           "Один яркий момент без спойлеров, только из фактов и описания приложенного кадра: атмосфера, коммуналка, Петербург, визуал в стиле масляной живописи, озвучка, звук, механика вроде «стол тащат рывками».",
           "Нельзя: повороты сюжета, кто убийца, концовки, скелет, что нашли за обоями, кадр «олоид на ладони», имена, которых нет в фактах.",
-          "Прямо скажи, что пока «Олоид» вышел только в App Store на iPhone и iPad, на других платформах релиза ещё не было. Даты других площадок не обещай.",
+          "Можно сказать, что «Олоид» есть в App Store на iPhone и iPad. Не пиши «эксклюзив», «только в App Store», «только на iOS» и что на других платформах релиза не было. Про VK Play, Android и Steam в этом посте не пиши.",
           "Код тебе дадут отдельно: вставь его ровно так, отдельной строкой, без ссылки вокруг, и больше никаких кодов. Напиши, что это одноразовая бесплатная загрузка, код вводят в App Store, и его забирает первый.",
           "Коротко скажи, что нажатие на ссылку само подставит код в App Store.",
           "Призыв своими словами: скачать, поиграть и оставить отзыв. Не копируй формулировку «скачай — поиграй — оставь отзыв». Цену не упоминать.",
@@ -469,6 +515,33 @@ export const PROJECTS: Project[] = [
           "Яркий момент: стол тащат рывками, и код на бесплатную загрузку",
           "Яркий момент: петербургская коммуналка, и код на бесплатную загрузку",
           "Яркий момент: визуал в стиле масляной живописи, и код на бесплатную загрузку",
+        ],
+      },
+      // Раз в сутки МСК со secondDailyHourMsk (15:00), после того как App Store за эти сутки уже вышел.
+      // До OLOID_VKPLAY_FROM слота нет. Пока OLOID_VKPLAY_URL содержит TODO, крон пост не публикует.
+      // Картинка — баннер из vkPlayPictures, не кадр из pictures и не баннер App Store.
+      {
+        id: "vkplay",
+        weight: 0,
+        withPicture: true,
+        link: () => OLOID_VKPLAY_URL,
+        brief: [
+          "Пост-новость: «Олоид» вышел на VK Play. Правила этой рубрики отдельные.",
+          "Голос обычный: строчные, разговорно, короткие абзацы. Начни с новости от команды, каждый раз другими словами.",
+          "Прямо назови игру мистической новеллой (мистическая визуальная новелла тоже подходит). Не называй её хоррором, ужастиком и horror.",
+          "Один яркий момент без спойлеров, только из фактов и описания приложенного кадра: атмосфера, коммуналка, Петербург, визуал в стиле масляной живописи, озвучка актёров, звук, механика вроде «стол тащат рывками». Длительность, если упоминаешь, — около 2–3 часов. Без пожара и без финала.",
+          "Нельзя: повороты сюжета, кто убийца, концовки, скелет, что нашли за обоями, кадр «олоид на ладони», имена, которых нет в фактах.",
+          "Про нейросети и ИИ — только если уместно, и только фразой «ИИ использовался как инструмент». Других формулировок про ИИ нет.",
+          "Промокоды и бесплатную раздачу не упоминай. Цену не упоминать.",
+          "Ссылку в конце вставь символ в символ, без UTM. Последняя строка перед ссылкой — короткое приглашение или вопрос новыми словами; не повторяй концовки недавних постов.",
+        ].join(" "),
+        topics: [
+          "Новость: «Олоид» вышел на VK Play, мистическая новелла",
+          "Новость: VK Play, петербургская коммуналка и двор",
+          "Новость: VK Play, визуал в стиле масляной живописи",
+          "Новость: VK Play, звук и озвучка актёров",
+          "Новость: VK Play, стол тащат рывками",
+          "Новость: VK Play, кому зайдёт медленный мистический детектив",
         ],
       },
       // Посев трейлера (с 2026-10-04, пока Илья не скажет стоп). Не чаще раза в 3 суток — alternateEveryDays. Файл: public/media/, раздаётся с домена бота
@@ -485,6 +558,11 @@ export const PROJECTS: Project[] = [
     // Первый успешный пост «Олоида» за сутки МСК. Пока день не позже OLOID_APP_STORE_PROMO_UNTIL и есть коды — appstore-promo, иначе эта рубрика.
     // Отключить слот: удалить эту строку. Остановить только коды: сдвинуть OLOID_APP_STORE_PROMO_UNTIL, массив не очищать.
     dailyRubric: "appstore",
+    // Второй пост суток: VK Play. Утро не занимает. До OLOID_VKPLAY_FROM не выбирается.
+    // Остановить: удалить secondDailyRubric. Ссылку заменить в OLOID_VKPLAY_URL.
+    secondDailyRubric: OLOID_VKPLAY_RUBRIC,
+    secondDailyFrom: OLOID_VKPLAY_FROM,
+    secondDailyHourMsk: OLOID_VKPLAY_SLOT_HOUR_MSK,
   },
 ];
 
@@ -502,18 +580,40 @@ export const mentionsPrice = (text: string) => PRICE_MENTION.test(text);
 const appStoreRubric = (rubricId?: string) =>
   rubricId === OLOID_APP_STORE_RUBRIC || rubricId === OLOID_APP_STORE_PROMO_RUBRIC;
 
+const noPriceRubric = (rubricId?: string) => appStoreRubric(rubricId) || rubricId === OLOID_VKPLAY_RUBRIC;
+
+function platformForbidden(rubricId: string | undefined, now: Date): string {
+  if (appStoreRubric(rubricId)) return OLOID_APP_STORE_PLATFORM_FORBIDDEN;
+  // Рубрика VK Play объявляет выход даже в превью до даты слота. Остальные рубрики — только с OLOID_VKPLAY_FROM.
+  if (rubricId === OLOID_VKPLAY_RUBRIC || mskCalendarDay(now) >= OLOID_VKPLAY_FROM) return OLOID_PLATFORM_FORBIDDEN_VK_OUT;
+  return OLOID_PLATFORM_FORBIDDEN;
+}
+
 /** Факты проекта на сегодня: с промокодом, пока он действует.
- *  Рубрики App Store цену не видят: факт «Цена в App Store — 500 ₽» и любой другой факт с ценой отбрасываются. */
+ *  Рубрики App Store и VK Play цену не видят: факт с ценой отбрасывается.
+ *  Статус VK Play подменяется по дате. Постам App Store этот факт не показываем. */
 export function factsFor(p: Project, now = new Date(), rubricId?: string): string[] {
-  const facts = promoActive(p, now) ? [...p.facts, p.promo!.fact] : p.facts;
-  if (!appStoreRubric(rubricId)) return facts;
+  let facts = promoActive(p, now) ? [...p.facts, p.promo!.fact] : p.facts;
+  if (p.id === "oloid") {
+    const vkFact =
+      rubricId === OLOID_VKPLAY_RUBRIC || mskCalendarDay(now) >= OLOID_VKPLAY_FROM
+        ? OLOID_VKPLAY_OUT_FACT
+        : OLOID_VKPLAY_SOON_FACT;
+    facts = facts.flatMap((f) => {
+      if (f !== OLOID_VKPLAY_SOON_FACT) return [f];
+      if (appStoreRubric(rubricId)) return [];
+      return [vkFact];
+    });
+  }
+  if (!noPriceRubric(rubricId)) return facts;
   return facts.filter((f) => !mentionsPrice(f));
 }
 
-/** Запреты для промпта. В рубриках App Store разрешение назвать 500 ₽ заменяется на «Цену не упоминать». */
-export function forbiddenFor(p: Project, rubricId?: string): string[] {
-  if (!appStoreRubric(rubricId)) return p.forbidden;
-  return p.forbidden.map((f) =>
+/** Запреты для промпта. В рубриках App Store и VK Play разрешение назвать 500 ₽ заменяется на «Цену не упоминать». */
+export function forbiddenFor(p: Project, rubricId?: string, now = new Date()): string[] {
+  const list = p.id === "oloid" ? p.forbidden.map((f) => (f === OLOID_PLATFORM_FORBIDDEN ? platformForbidden(rubricId, now) : f)) : p.forbidden;
+  if (!noPriceRubric(rubricId)) return list;
+  return list.map((f) =>
     f.replace(/Цену называть только 500 ₽ \(App Store, iOS\); другие цены не выдумывать\.\s*/u, "Цену не упоминать. "),
   );
 }
