@@ -12,13 +12,17 @@ export type ScheduledPost = {
   text: string;
   media: Media;
   topicTag?: string;
+  // Публиковать только после флага threads:scheduled:<after>. Пока его нет — пост пропускается.
+  after?: string;
 };
 
 // Та же схема, что Project.link у «Бюро»: utm() в lib/projects.ts, месяц кампании — UTC.
-// notBefore 21:00 МСК = 18:00 UTC, кампания threads-2026-10. utm_content задан явно.
+// Часть 1: notBefore 21:00 МСК = 18:00 UTC, кампания threads-2026-10.
+// Часть 2: notBefore 11:00 МСК = 08:00 UTC, та же кампания. utm_content задан явно.
 const buro = PROJECTS.find((p) => p.id === "buro");
 if (!buro) throw new Error("нет проекта buro");
 const SERIES_DELO1_LINK = buro.link(new Date("2026-10-19T21:00:00+03:00"), "series-delo1-part1");
+const SERIES_DELO1_PART2_LINK = buro.link(new Date("2026-10-21T11:00:00+03:00"), "series-delo1-part2");
 
 export const SCHEDULED_TEXT_MAX = 500;
 
@@ -39,6 +43,26 @@ export const SCHEDULED_POSTS: ScheduledPost[] = [
 Кто убийца? Пиши номер подозреваемого в комментариях 👇 Разгадка — завтра.
 
 Хочешь такое же дело, где подозреваемые — твои друзья? ${SERIES_DELO1_LINK}`,
+  },
+  {
+    id: "series-delo1-part2",
+    channel: "pomazkof",
+    // Первый слот @pomazkof в этот день и позже: 11:00 МСК. 16:00 и 21:00 — если слот пропущен.
+    notBefore: "2026-10-21T11:00:00+03:00",
+    // Флаг threads:scheduled:series-delo1-part1. Пока часть 1 не опубликована, этот пост не берём.
+    after: "series-delo1-part1",
+    topicTag: "детектив",
+    media: {
+      type: "VIDEO",
+      url: "https://threads-autopost-six.vercel.app/media/buro/series-delo1-part2.mp4",
+    },
+    text: `Дело №1. «Смерть на даче, 1987» — РАЗГАДКА 🔎
+
+Кто отравил председателя «Рассвета»? Смотри до конца. Угадал? Пиши в комментариях 👇
+
+Начало дела — в предыдущем ролике.
+
+Хочешь такое же дело, где подозреваемые — твои друзья? ${SERIES_DELO1_PART2_LINK}`,
   },
 ];
 
@@ -73,10 +97,12 @@ async function rememberPublished(id: string, postId: string) {
  * Один заготовленный пост за запуск. Флаг threads:scheduled:<id> ставится только после успеха.
  * Повторный запуск сначала ищет тот же текст в Threads, чтобы не создать второй пост,
  * если публикация прошла, а флаг не успел записаться.
+ * Пост с after выходит только когда флаг предшественника уже стоит; иначе этот запуск его не берёт.
  */
 export async function publishDueScheduled(ch: Channel, now: Date, dry: boolean): Promise<ScheduledOutcome> {
   for (const post of dueScheduledPosts(ch.id, now)) {
     if (await isScheduledPublished(post.id)) continue;
+    if (post.after && !(await isScheduledPublished(post.after))) continue;
     if (dry) return { kind: "dry", post };
 
     const length = post.text.length;
