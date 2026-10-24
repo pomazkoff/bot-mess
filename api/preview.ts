@@ -62,7 +62,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const rotation = channel.projects.includes("oloid")
       ? await getOloidRotationState("oloid").catch((e) => ((redis = String(e?.message ?? e)), null))
       : null;
-    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, tone } = await makeDraft({
+    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, tone, mediaId } = await makeDraft({
       channel,
       history,
       lastProject,
@@ -79,11 +79,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       regularCount: rotation?.regularCount,
       dateHooks: rotation?.dateHooks,
       lastAskWasPoll: rotation?.lastAskWasPoll,
+      mediaUsed: rotation?.mediaUsed,
     });
     const promoLine = promoCode != null ? `\nПромокод: ${promoCode}. Осталось бы: ${promoLeft}. Код не списан.` : "";
     const telegram =
       req.query.notify === "1"
-        ? await notify(`🧪 Превью, НЕ опубликовано (${channel.name} · ${project.name}, ${rubricId}${media ? (media.type === "VIDEO" ? ", с видео" : ", с картинкой") : ""}):${promoLine}\n\n${skipReason ?? text ?? "ни один вариант не прошёл проверки"}`)
+        ? await notify(`🧪 Превью, НЕ опубликовано (${channel.name} · ${project.name}, ${rubricId}${media ? (media.type === "CAROUSEL" ? ", с каруселью" : media.type === "VIDEO" ? ", с видео" : ", с картинкой") : ""}):${promoLine}\n\n${skipReason ?? text ?? "ни один вариант не прошёл проверки"}`)
         : undefined;
     return res.json({
       preview: true,
@@ -95,7 +96,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       rubric: rubricId,
       topic,
       topicTag,
-      media: media?.url,
+      media: media?.type === "CAROUSEL" ? media.urls : media?.url,
+      mediaId,
       promoCode,
       promoLeft,
       quiet,

@@ -207,6 +207,34 @@ function pollField(poll: PollAttachment): string {
   return JSON.stringify(body);
 }
 
+async function createCarouselContainer(token: string, urls: string[], text: string, topicTag?: string): Promise<string> {
+  const create = (params: Record<string, string>) => call("POST", `/${USER}/threads`, params);
+  const itemIds = await Promise.all(
+    urls.map(async (imageUrl) => {
+      const item = await create({ media_type: "IMAGE", image_url: imageUrl, is_carousel_item: "true", access_token: token });
+      if (!item?.id) throw new Error("Threads carousel item: нет id");
+      return String(item.id);
+    }),
+  );
+  await Promise.all(itemIds.map((id) => waitForContainer(id, token, text, true)));
+  const parentParams: Record<string, string> = {
+    media_type: "CAROUSEL",
+    children: itemIds.join(","),
+    text,
+    access_token: token,
+  };
+  let parent: any;
+  try {
+    parent = await create(topicTag ? { ...parentParams, topic_tag: topicTag } : parentParams);
+  } catch (e) {
+    if (!topicTag) throw e;
+    console.warn("Карусель: повтор без topic_tag:", e);
+    parent = await create(parentParams);
+  }
+  if (!parent?.id) throw new Error("Threads carousel: нет id");
+  return String(parent.id);
+}
+
 export async function publishPost(
   ch: Channel,
   text: string,
@@ -215,6 +243,14 @@ export async function publishPost(
   poll?: PollAttachment,
 ): Promise<PublishedPost> {
   const token = await ensureFreshToken(ch);
+  if (media?.type === "CAROUSEL") {
+    const urls = media.urls ?? [];
+    if (urls.length < 2 || urls.length > 4) throw new Error("Карусель: нужно 2–4 картинки");
+    if (poll) console.warn("Опрос снят: Threads принимает poll_attachment только у текстового поста");
+    const containerId = await createCarouselContainer(token, urls, text, topicTag);
+    const id = await publishReady(containerId, token, text, true);
+    return poll ? { id, pollDropped: true } : { id };
+  }
   const base: Record<string, string> = media
     ? { media_type: media.type, [media.type === "VIDEO" ? "video_url" : "image_url"]: media.url, text, access_token: token }
     : { media_type: "TEXT", text, access_token: token };

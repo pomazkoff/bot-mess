@@ -19,7 +19,9 @@ import {
 import { PROJECTS } from "./projects.js";
 import { pickRubric } from "./run.js";
 import type { HistoryItem } from "./store.js";
-import { OLOID_CAROUSEL_ENABLED, OLOID_GAMEPLAY_VIDEO_ENABLED, pickCarouselNames, pickGameplayName } from "./variety.js";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { pickRegularShown, shownAssetFiles } from "./variety.js";
 
 const oloid = PROJECTS.find((project) => project.id === "oloid");
 assert.ok(oloid);
@@ -124,10 +126,38 @@ assert.equal(rotationSafetyProblem("ИИ использовался как ин�
 assert.ok(rotationSafetyProblem("это хоррор", "backstage"));
 assert.equal(rotationSafetyProblem("это хоррор", "vkplay"), null);
 
-assert.equal(OLOID_CAROUSEL_ENABLED, false);
-assert.equal(OLOID_GAMEPLAY_VIDEO_ENABLED, false);
-assert.deepEqual(pickCarouselNames(), []);
-assert.equal(pickGameplayName(), undefined);
+const shownFiles = shownAssetFiles();
+const shownBlob = shownFiles.flatMap((asset) => [asset.id, ...asset.files]).join("\n");
+for (const word of ["06_tayna", "04_03_psych", "03_oloid", "04_gameplay", "05_zakulise", "01_03_choice", "02_04_tool", "tayna_oloida"]) {
+  assert.equal(shownBlob.includes(word), false, word);
+}
+for (const asset of shownFiles) {
+  const carousel = asset.files.filter((file) => file.endsWith(".jpg"));
+  if (asset.files[0].endsWith(".mp4")) assert.equal(asset.files.length, 1);
+  else assert.ok(carousel.length >= 2 && carousel.length <= 4, asset.id);
+  for (const file of asset.files) assert.equal(existsSync(join("public/media/oloid", file)), true, file);
+}
+assert.equal(existsSync("public/media/oloid/videos/01_teaser_atmosfera.mp4"), true);
+assert.equal(shownBlob.includes("01_teaser"), false);
+assert.equal(existsSync("public/media/oloid/carousels/06_tayna_oloida"), false);
+assert.equal(existsSync("public/media/oloid/carousels/03_personazhi/04_03_psych.jpg"), false);
+assert.equal(existsSync("public/media/oloid/videos/03_oloid_animaciya.mp4"), false);
+assert.equal(pickRegularShown("dev-numbers", "839 файлов", {}), null);
+assert.equal(pickRegularShown("trailer", "тизер", {}), null);
+assert.equal(pickRegularShown("appstore", "App Store", {}), null);
+assert.equal(pickRegularShown("ask", "Как вам ближе такая история: в наушниках", {}), null);
+const yard = pickRegularShown("petersburg", "Двор-колодец доходного дома", {});
+assert.ok(yard && (yard.id === "01_piter_mesta" || yard.id === "video-02-lokacii"));
+assert.equal(pickRegularShown("petersburg", "Конюшенная и фан-зона 2018 года", {})?.id, "05_atmosfera_2018");
+assert.equal(pickRegularShown("backstage", "Почему гвозди вытаскиваются протяжкой, а не кликом", {})?.id, "04_vybory_minigry");
+assert.equal(pickRegularShown("backstage", "Звук: половина работы и музыкант", {})?.id, "video-06-den");
+assert.equal(
+  pickRegularShown("petersburg", "Двор-колодец доходного дома", { "01_piter_mesta": "2026-10-02T00:00:00.000Z", "video-02-lokacii": "2026-10-01T00:00:00.000Z" })?.id,
+  "video-02-lokacii",
+);
+const fan = pickRegularShown("petersburg", "Конюшенная и фан-зона 2018 года", {});
+assert.equal(fan?.media.type, "CAROUSEL");
+assert.equal(fan?.media.urls?.length, 4);
 
 const backstage = oloid.rubrics.find((rubric) => rubric.id === "backstage");
 const ask = oloid.rubrics.find((rubric) => rubric.id === "ask");

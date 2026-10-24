@@ -6,7 +6,14 @@
 import { OLOID_DEV_NUMBERS_RUBRIC } from "./devFacts.js";
 
 // Видео прикрепляется к посту по публичной ссылке: Meta скачивает его сама (MP4/MOV, H.264, до 5 минут, до 1 ГБ)
-export type Media = { type: "VIDEO" | "IMAGE"; url: string };
+export type Media = {
+  type: "VIDEO" | "IMAGE" | "CAROUSEL";
+  url: string;
+  /** Кадры карусели по порядку, 2–4. У видео и одной картинки не задаётся. */
+  urls?: string[];
+  /** Threads не принял файл — тот же текст можно выпустить без медиа. У трейлера нет. */
+  droppable?: boolean;
+};
 
 // Картинка из игры для постов: что на ней (подсказка для текста и фактчека) и теги для подбора к теме
 export type Picture = { url: string; about: string; tags: string[] };

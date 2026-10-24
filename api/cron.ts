@@ -109,8 +109,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       regularCount: rotation?.regularCount,
       dateHooks: rotation?.dateHooks,
       lastAskWasPoll: rotation?.lastAskWasPoll,
+      mediaUsed: rotation?.mediaUsed,
     });
-    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, lineId, tone, regularCount } = draft;
+    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, lineId, tone, regularCount, mediaId } = draft;
     const where = `${channel.name} · ${project.name}`;
 
     // Ссылка VK Play ещё заглушка: пост не генерируем и не публикуем. День закрываем, чтобы следующий слот суток не пропускался тоже.
@@ -134,7 +135,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         rubric: rubricId,
         topic,
         topicTag,
-        media: media?.url,
+        media: media?.type === "CAROUSEL" ? media.urls : media?.url,
+        mediaId,
         promoCode,
         promoLeft,
         quiet,
@@ -164,8 +166,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       })
       .catch(async (e) => {
         // Картинка не прошла — постим текст. Если контейнер уже опубликован, второй пост не создаём.
-        if (media?.type !== "IMAGE" || postAlreadyPublished(e)) throw e;
-        await notify(`⚠️ ${where}: картинка не прошла (${e?.message ?? e}), публикую пост без неё.`);
+        if ((!media?.droppable && media?.type !== "IMAGE") || postAlreadyPublished(e)) throw e;
+        await notify(`⚠️ ${where}: медиа не прошло (${e?.message ?? e}), публикую пост без него.`);
         used = undefined;
         const again = await publishPost(channel, text, topicTag, undefined, poll);
         pollDropped = Boolean(again.pollDropped);
@@ -187,6 +189,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         devFactId,
         lineId,
         askPoll: rubricId === OLOID_ASK_RUBRIC ? Boolean(pollOptions?.length) : undefined,
+        mediaId: used ? mediaId : undefined,
       });
     }
     await pushHistory({
@@ -205,6 +208,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       dateHook,
       devFactId,
       lineId,
+      mediaId: used ? mediaId : undefined,
     });
     await setLastProject(channel, project.id);
     const promoLine = promoCode != null ? `\nПромокод: ${promoCode}. Осталось: ${promoLeft ?? 0}` : "";
@@ -216,8 +220,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       devFactId ? `факт ${devFactId}` : "",
       tone === "morning" ? "утро" : tone === "evening" ? "вечер" : tone === "day" ? "день" : "",
     ].filter(Boolean);
-    await notify(`✅ Опубликовано (${where}, ${rubricId}${used ? (used.type === "VIDEO" ? ", с видео" : ", с картинкой") : ""}${marks.length ? `, ${marks.join(", ")}` : ""}):${topic ? `\nТема: ${topic}` : ""}${topicTag ? `\nТема Threads: ${topicTag}` : ""}${promoLine}\n\n${text}`);
-    return res.json({ posted: true, channel: channel.id, project: project.id, rubric: rubricId, topic, media: used?.url, promoCode, promoLeft, quiet, poll: pollOptions, pollDropped, dateHook, devFactId, tone, postId, text });
+    const mediaNote = !used ? "" : used.type === "CAROUSEL" ? ", с каруселью" : used.type === "VIDEO" ? ", с видео" : ", с картинкой";
+    await notify(`✅ Опубликовано (${where}, ${rubricId}${mediaNote}${marks.length ? `, ${marks.join(", ")}` : ""}):${topic ? `\nТема: ${topic}` : ""}${topicTag ? `\nТема Threads: ${topicTag}` : ""}${promoLine}\n\n${text}`);
+    return res.json({ posted: true, channel: channel.id, project: project.id, rubric: rubricId, topic, media: used?.type === "CAROUSEL" ? used.urls : used?.url, mediaId: used ? mediaId : undefined, promoCode, promoLeft, quiet, poll: pollOptions, pollDropped, dateHook, devFactId, tone, postId, text });
   } catch (e: any) {
     console.error(e);
     await notify(`❌ Threads-бот упал (${channel.name}): ${e?.message ?? e}`);

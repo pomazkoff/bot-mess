@@ -22,6 +22,7 @@ import {
 import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, mskCalendarDay, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RUBRIC, OLOID_VKPLAY_RUBRIC, OLOID_VKPLAY_SKIP_REASON, OLOID_VKPLAY_SLOT_HOUR_MSK, PROJECTS, pickWeighted, spentAppStoreCodes, vkPlayUrlBlocked, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
 import type { HistoryItem } from "./store.js";
 import type { Channel } from "./channels.js";
+import { pickRegularShown } from "./variety.js";
 
 const MAX_ATTEMPTS = 3;
 
@@ -44,6 +45,8 @@ export type Draft = {
   tone?: SlotTone;
   /** Сколько обычных постов уже вышло до этого. Тихий — каждый третий. */
   regularCount?: number;
+  /** Карусель или ролик обычного поста. В Redis пишется только если медиа реально ушло. */
+  mediaId?: string;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -286,6 +289,7 @@ export async function makeDraft(opts: {
   regularCount?: number | null;
   dateHooks?: Record<string, string>;
   lastAskWasPoll?: boolean | null;
+  mediaUsed?: Record<string, string>;
 }): Promise<Draft> {
   const {
     channel,
@@ -304,6 +308,7 @@ export async function makeDraft(opts: {
     regularCount: storedRegularCount = null,
     dateHooks = {},
     lastAskWasPoll = null,
+    mediaUsed = {},
   } = opts;
   const project = pickProject(channel, lastProject, forcedProject);
 
@@ -358,13 +363,22 @@ export async function makeDraft(opts: {
   if (rubric.id === OLOID_VKPLAY_RUBRIC && vkPlayUrlBlocked() && forcedRubric !== OLOID_VKPLAY_RUBRIC) {
     return { project, rubricId: rubric.id, topic, topicTag, text: null, rejected: [OLOID_VKPLAY_SKIP_REASON], skipReason: OLOID_VKPLAY_SKIP_REASON, tone };
   }
-  // Опрос — только текст. Картинка к poll_attachment не клеится. Карусели и ролики геймплея выключены (lib/variety.ts).
-  // Redis помнит, был ли прошлый «вопрос к вам» опросом. Если ключа нет — смотрим историю.
+  // Опрос — только текст. Картинка к poll_attachment не клеится.
+  // Карусель и ролик — только обычный пост, по теме из README, кто дольше не выходил.
+  // Трейлер, магазины и цифры сюда не попадают: у трейлера своё видео и свой срок.
   const askFromHistory = projectHistory.find((item) => item.rubric === OLOID_ASK_RUBRIC);
   const askWasPoll = lastAskWasPoll ?? (askFromHistory ? askFromHistory.poll === true : null);
   const wantPoll = rubric.id === OLOID_ASK_RUBRIC && askWasPoll !== true;
-  const picture = rubric.media || wantPoll ? undefined : pickPicture(project, rubric, topic, history);
-  const media: Media | undefined = rubric.media ?? (picture && { type: "IMAGE", url: picture.url });
+  const shown =
+    rotation && !wantPoll && !rubric.media
+      ? pickRegularShown(
+          rubric.id,
+          topic,
+          mergeLastUsed(mediaUsed, projectHistory.map((item) => ({ id: item.mediaId, at: item.at }))),
+        )
+      : null;
+  const picture = rubric.media || wantPoll || shown ? undefined : pickPicture(project, rubric, topic, history);
+  const media: Media | undefined = rubric.media ?? shown?.media ?? (picture && { type: "IMAGE", url: picture.url });
   const detective = project.id === "buro" ? pickDetectiveRef(history, project.forceNextRef) : undefined;
   const promoCode = promoCodeForRubric(rubric.id, nextCode, promoScheduled, forcedRubric);
   const promoLeft = promoCode ? OLOID_APP_STORE_CODES.length - spent.length - 1 : undefined;
@@ -382,6 +396,7 @@ export async function makeDraft(opts: {
     lineId: line?.id,
     tone,
     regularCount,
+    mediaId: shown?.id,
   };
 
   if (rubric.id === OLOID_APP_STORE_PROMO_RUBRIC && !promoCode) {
@@ -398,6 +413,7 @@ export async function makeDraft(opts: {
     devFact: devFact?.text,
     wantPoll,
     characterLine: line ? `${line.speaker}: «${line.line}». ${line.note}` : undefined,
+    shownNote: shown?.note,
   };
 
   for (let i = 0; i < MAX_ATTEMPTS; i++) {
@@ -412,7 +428,7 @@ export async function makeDraft(opts: {
       (detective ? detectiveRefProblem(candidate, history, detective) : null) ??
       repeatedEnding(candidate, history, project.id) ??
       tooSimilar(candidate, history) ??
-      (await factCheck(candidate, project, picture?.about, now, { rubricId: rubric.id, promoCode, devFact: devFact?.text, quiet }));
+      (await factCheck(candidate, project, shown?.note ?? picture?.about, now, { rubricId: rubric.id, promoCode, devFact: devFact?.text, quiet }));
     if (problem) {
       feedback = problem;
       rejected.push(`${problem}: ${candidate}`);
