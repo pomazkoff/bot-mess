@@ -1,6 +1,11 @@
 import { getToken, saveToken } from "./store.js";
 import type { Media } from "./projects.js";
 import type { Channel } from "./channels.js";
+import type { PollAttachment } from "./oloidRotation.js";
+
+// Опрос Threads (документация Meta, июль 2026): только текстовый пост, поле poll_attachment.
+// 2–4 варианта, ключи option_a…option_d, каждый 1–25 символов. Картинка к опросу не клеится.
+// Если контейнер с опросом не создался — публикуем тот же текст без опроса.
 
 const API = "https://graph.threads.net/v1.0";
 const USER = process.env.THREADS_USER_ID || "me";
@@ -193,23 +198,101 @@ export async function ensureFreshToken(ch: Channel): Promise<string> {
   return t.value;
 }
 
-export async function publishPost(ch: Channel, text: string, topicTag?: string, media?: Media): Promise<string> {
+export type PublishedPost = { id: string; pollDropped?: boolean };
+
+function pollField(poll: PollAttachment): string {
+  const body: Record<string, string> = { option_a: poll.option_a, option_b: poll.option_b };
+  if (poll.option_c) body.option_c = poll.option_c;
+  if (poll.option_d) body.option_d = poll.option_d;
+  return JSON.stringify(body);
+}
+
+async function createCarouselContainer(token: string, urls: string[], text: string, topicTag?: string): Promise<string> {
+  const create = (params: Record<string, string>) => call("POST", `/${USER}/threads`, params);
+  const itemIds = await Promise.all(
+    urls.map(async (imageUrl) => {
+      const item = await create({ media_type: "IMAGE", image_url: imageUrl, is_carousel_item: "true", access_token: token });
+      if (!item?.id) throw new Error("Threads carousel item: нет id");
+      return String(item.id);
+    }),
+  );
+  await Promise.all(itemIds.map((id) => waitForContainer(id, token, text, true)));
+  const parentParams: Record<string, string> = {
+    media_type: "CAROUSEL",
+    children: itemIds.join(","),
+    text,
+    access_token: token,
+  };
+  let parent: any;
+  try {
+    parent = await create(topicTag ? { ...parentParams, topic_tag: topicTag } : parentParams);
+  } catch (e) {
+    if (!topicTag) throw e;
+    console.warn("Карусель: повтор без topic_tag:", e);
+    parent = await create(parentParams);
+  }
+  if (!parent?.id) throw new Error("Threads carousel: нет id");
+  return String(parent.id);
+}
+
+export async function publishPost(
+  ch: Channel,
+  text: string,
+  topicTag?: string,
+  media?: Media,
+  poll?: PollAttachment,
+): Promise<PublishedPost> {
   const token = await ensureFreshToken(ch);
+  if (media?.type === "CAROUSEL") {
+    const urls = media.urls ?? [];
+    if (urls.length < 2 || urls.length > 4) throw new Error("Карусель: нужно 2–4 картинки");
+    if (poll) console.warn("Опрос снят: Threads принимает poll_attachment только у текстового поста");
+    const containerId = await createCarouselContainer(token, urls, text, topicTag);
+    const id = await publishReady(containerId, token, text, true);
+    return poll ? { id, pollDropped: true } : { id };
+  }
   const base: Record<string, string> = media
     ? { media_type: media.type, [media.type === "VIDEO" ? "video_url" : "image_url"]: media.url, text, access_token: token }
     : { media_type: "TEXT", text, access_token: token };
 
+  // Опрос только у текста. Картинка и опрос вместе API не принимает — опрос снимаем до запроса.
+  let pollDropped = false;
+  let attachment = poll && !media ? pollField(poll) : undefined;
+  if (poll && media) {
+    console.warn("Опрос снят: Threads принимает poll_attachment только у текстового поста");
+    pollDropped = true;
+  }
+
+  const create = (params: Record<string, string>) => call("POST", `/${USER}/threads`, params);
+
   let container: any;
   try {
-    container = await call("POST", `/${USER}/threads`, topicTag ? { ...base, topic_tag: topicTag } : base);
+    container = await create(topicTag ? { ...base, ...(attachment ? { poll_attachment: attachment } : {}), topic_tag: topicTag } : attachment ? { ...base, poll_attachment: attachment } : base);
   } catch (e) {
-    if (!topicTag) throw e;
-    console.warn("Повтор без topic_tag:", e); // если тема не прошла валидацию — постим без неё
-    container = await call("POST", `/${USER}/threads`, base);
+    if (topicTag) {
+      console.warn("Повтор без topic_tag:", e);
+      try {
+        container = await create(attachment ? { ...base, poll_attachment: attachment } : base);
+      } catch (e2) {
+        if (!attachment) throw e2;
+        console.warn("Повтор без опроса:", e2);
+        pollDropped = true;
+        attachment = undefined;
+        container = await create(base);
+      }
+    } else if (attachment) {
+      console.warn("Повтор без опроса:", e);
+      pollDropped = true;
+      attachment = undefined;
+      container = await create(base);
+    } else {
+      throw e;
+    }
   }
 
   // Текст ждём до ~60 с (опрос каждые 2–3 с): сбой GET и IN_PROGRESS — ещё не готово.
   // Срок вышел — публикуем всё равно. Медиа — до 3 минут, без FINISHED не публикуем.
   // threads_publish при «ещё не доехало» и 5xx повторяем до 4 раз; если id уже есть — стоп.
-  return publishReady(container.id, token, text, Boolean(media));
+  const id = await publishReady(container.id, token, text, Boolean(media));
+  return pollDropped ? { id, pollDropped: true } : { id };
 }

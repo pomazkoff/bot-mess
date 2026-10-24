@@ -1,7 +1,28 @@
-import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, mskCalendarDay, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RUBRIC, OLOID_VKPLAY_RUBRIC, OLOID_VKPLAY_SKIP_REASON, OLOID_VKPLAY_SLOT_HOUR_MSK, PROJECTS, pickWeighted, spentAppStoreCodes, vkPlayUrlBlocked, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
+import { OLOID_DEV_NUMBER_FACTS, OLOID_DEV_NUMBERS_RUBRIC } from "./devFacts.js";
 import { appStoreCodeProblem, appStoreMomentProblem, appStorePriceProblem, detectiveRefProblem, draftPost, repeatedEnding, ruleCheck, tooSimilar, vkPlayProblem, factCheck } from "./generate.js";
+import {
+  OLOID_ASK_RUBRIC,
+  OLOID_LINE_RUBRIC,
+  countRegularPosts,
+  eligibleRotationRubrics,
+  isOloidRotationRubric,
+  matchingDateHook,
+  mergeLastUsed,
+  oloidSlotTone,
+  pickCharacterLine,
+  pickLeastRecent,
+  pollOptionsProblem,
+  regularPostIsQuiet,
+  toneNoteForRubric,
+  toPollAttachment,
+  usedDateHookIds,
+  type PollAttachment,
+  type SlotTone,
+} from "./oloidRotation.js";
+import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, mskCalendarDay, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RUBRIC, OLOID_VKPLAY_RUBRIC, OLOID_VKPLAY_SKIP_REASON, OLOID_VKPLAY_SLOT_HOUR_MSK, PROJECTS, pickWeighted, spentAppStoreCodes, vkPlayUrlBlocked, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
 import type { HistoryItem } from "./store.js";
 import type { Channel } from "./channels.js";
+import { pickRegularShown } from "./variety.js";
 
 const MAX_ATTEMPTS = 3;
 
@@ -16,6 +37,16 @@ export type Draft = {
   promoCode?: string; // задан только у поста с кодом; превью его не списывает
   promoLeft?: number; // сколько кодов останется после успешной публикации этого
   skipReason?: string; // слот не генерируем и не публикуем; причина для лога и Telegram
+  quiet?: boolean;
+  poll?: PollAttachment;
+  dateHook?: string;
+  devFactId?: string;
+  lineId?: string;
+  tone?: SlotTone;
+  /** Сколько обычных постов уже вышло до этого. Тихий — каждый третий. */
+  regularCount?: number;
+  /** Карусель или ролик обычного поста. В Redis пишется только если медиа реально ушло. */
+  mediaId?: string;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -75,7 +106,9 @@ export function secondDailyPending(project: Project, doneDate: string | null, no
  *  OLOID_APP_STORE_PROMO_UNTIL и есть неиспользованный код. Иначе слот — обычный appstore.
  *  secondDailyRubric — другой слот суток, не раньше secondDailyHourMsk, и только если dailyRubric за сегодня уже вышел.
  *  До этого часа и пока дневной пост не опубликован поведение прежнее: утро остаётся за App Store.
- *  Трейлер при этом не сбрасывается: его срок смотрит только на посты своей рубрики и сработает на следующем запуске. */
+ *  Трейлер при этом не сбрасывается: его срок смотрит только на посты своей рубрики и сработает на следующем запуске.
+ *  У «Олоида» обычный пост — не веса, а очередь LRU (rotation.lastUsed). preferRegular: календарный повод
+ *  забирает слот у трейлера, магазины не трогает. */
 export function pickRubric(
   project: Project,
   history: HistoryItem[],
@@ -85,6 +118,7 @@ export function pickRubric(
   dailyDoneDate: string | null = null,
   appStorePromo = false,
   secondDailyDoneDate: string | null = null,
+  rotation?: { lastUsed?: Record<string, string>; preferRegular?: boolean },
 ): Rubric {
   const forced = project.rubrics.find((r) => r.id === forcedRubric);
   if (forced) return forced;
@@ -93,7 +127,12 @@ export function pickRubric(
   const daily = project.rubrics.find((r) => r.id === project.dailyRubric);
   const promo = project.rubrics.find((r) => r.id === OLOID_APP_STORE_PROMO_RUBRIC);
   const second = project.rubrics.find((r) => r.id === project.secondDailyRubric);
-  const normal = () => pickWeighted(project.rubrics.filter((r) => r !== alt && r !== daily && r !== promo && r !== second && r.weight > 0), lastRubric, (r) => r.id);
+  const weighted = () => pickWeighted(project.rubrics.filter((r) => r !== alt && r !== daily && r !== promo && r !== second && r.weight > 0), lastRubric, (r) => r.id);
+  const regular = () => {
+    if (project.id !== "oloid") return weighted();
+    const pool = eligibleRotationRubrics(project);
+    return pool.length ? pickLeastRecent(pool, rotation?.lastUsed ?? {}) : weighted();
+  };
   const dailyPending = !!(daily && dailyRubricPending(project, dailyDoneDate, now));
   const secondPending = !!(second && secondDailyPending(project, secondDailyDoneDate, now));
   const afternoon = mskHour(now) >= (project.secondDailyHourMsk ?? OLOID_VKPLAY_SLOT_HOUR_MSK);
@@ -112,10 +151,12 @@ export function pickRubric(
     if (appStorePromo && promo) return promo;
     return daily;
   }
-  if (!alt) return normal();
+  // Календарный повод занимает один обычный пост и не сбрасывает срок трейлера.
+  if (rotation?.preferRegular) return regular();
+  if (!alt) return regular();
   const days = project.alternateEveryDays;
-  if (days == null) return lastRubric !== alt.id ? alt : normal();
-  return alternateDue(project.id, alt.id, allHistory, now, days) ? alt : normal();
+  if (days == null) return lastRubric !== alt.id ? alt : regular();
+  return alternateDue(project.id, alt.id, allHistory, now, days) ? alt : regular();
 }
 
 /** Прошло не меньше N суток с последнего поста рубрики-посева, либо такого поста ещё не было. */
@@ -224,6 +265,9 @@ export function pickProject(channel: Channel, lastProject: string | null, forced
   return own.find((p) => p.id === forcedProject) ?? own.find((p) => p.id !== lastProject) ?? own[0];
 }
 
+const LINE_SKIP = "рубрика «реплика дня» пропущена: в фактах нет дословной реплики без спойлера";
+const DEV_NUMBERS_SKIP = "рубрика «цифры разработки» пропущена: список проверенных цифр пуст";
+
 export async function makeDraft(opts: {
   channel: Channel;
   history: HistoryItem[];
@@ -238,34 +282,122 @@ export async function makeDraft(opts: {
   secondDailyDoneDate?: string | null;
   /** Уже выданные коды App Store. null — Redis недоступен, код не показываем. */
   usedAppStoreCodes?: string[] | null;
+  /** Очередь обычных рубрик «Олоида». null у счётчика — считаем по истории. */
+  rubricUsed?: Record<string, string>;
+  devFactUsed?: Record<string, string>;
+  lineUsed?: Record<string, string>;
+  regularCount?: number | null;
+  dateHooks?: Record<string, string>;
+  lastAskWasPoll?: boolean | null;
+  mediaUsed?: Record<string, string>;
 }): Promise<Draft> {
-  const { channel, history, lastProject, forcedProject, forcedRubric, forcedTopic, now, dailyDoneDate = null, secondDailyDoneDate = null, usedAppStoreCodes = null } = opts;
+  const {
+    channel,
+    history,
+    lastProject,
+    forcedProject,
+    forcedRubric,
+    forcedTopic,
+    now,
+    dailyDoneDate = null,
+    secondDailyDoneDate = null,
+    usedAppStoreCodes = null,
+    rubricUsed = {},
+    devFactUsed = {},
+    lineUsed = {},
+    regularCount: storedRegularCount = null,
+    dateHooks = {},
+    lastAskWasPoll = null,
+    mediaUsed = {},
+  } = opts;
   const project = pickProject(channel, lastProject, forcedProject);
 
   // «Не повторять прошлую рубрику» — по постам этого аккаунта. Интервал трейлера — по всей истории проекта.
   // Темы и антиповтор — тоже по всем аккаунтам, чтобы два аккаунта не выдавали одно и то же
   const own = history.filter((h) => (h.channel ?? "pomazkof") === channel.id);
+  const projectHistory = history.filter((h) => h.project === project.id);
   const promoScheduled = appStorePromoOpen(now);
   // Код читаем для автоматического слота, пока дата открыта, и для явного превью appstore-promo после неё.
   const previewPromo = forcedRubric === OLOID_APP_STORE_PROMO_RUBRIC;
   const canReadCodes = project.id === "oloid" && usedAppStoreCodes !== null;
   const spent = canReadCodes ? spentAppStoreCodes(usedAppStoreCodes, history) : [];
   const nextCode = canReadCodes && (promoScheduled || previewPromo) ? nextAppStoreCode(spent) : null;
-  const rubric = pickRubric(project, own, now, forcedRubric, history, dailyDoneDate, promoScheduled && nextCode != null, secondDailyDoneDate);
+  const day = mskDay(now);
+  const dateHookDue = project.id === "oloid" ? matchingDateHook(day, usedDateHookIds(day, dateHooks, projectHistory)) : null;
+  const rubricLastUsed = mergeLastUsed(
+    rubricUsed,
+    projectHistory.map((item) => ({ id: item.rubric, at: item.at })),
+  );
+  const rubric = pickRubric(project, own, now, forcedRubric, history, dailyDoneDate, promoScheduled && nextCode != null, secondDailyDoneDate, {
+    lastUsed: rubricLastUsed,
+    preferRegular: dateHookDue != null,
+  });
   const wanted = forcedTopic?.toLowerCase();
-  const topic = (wanted && rubric.topics?.find((t) => t.toLowerCase().includes(wanted))) || pickTopic(rubric, history);
+  let topic = (wanted && rubric.topics?.find((t) => t.toLowerCase().includes(wanted))) || pickTopic(rubric, history);
   const linkContent = `${channel.id}-${rubric.id}`;
   const topicTag = pickTopicTag(project, rubric, history);
+  const regularCount = storedRegularCount ?? countRegularPosts(projectHistory);
+  const rotation = project.id === "oloid" && isOloidRotationRubric(rubric.id);
+  const quiet = rotation && regularPostIsQuiet(regularCount);
+  const tone = project.id === "oloid" ? oloidSlotTone(mskHour(now)) : undefined;
+  const dateHook = rotation ? dateHookDue : null;
+
+  if (rubric.id === OLOID_LINE_RUBRIC) {
+    const line = pickCharacterLine(mergeLastUsed(lineUsed, projectHistory.map((item) => ({ id: item.lineId, at: item.at }))));
+    if (!line) return { project, rubricId: rubric.id, topic, topicTag, text: null, rejected: [LINE_SKIP], skipReason: LINE_SKIP, tone, regularCount };
+    topic = `${line.speaker}: ${line.line}`;
+  }
+  const devFact =
+    rubric.id === OLOID_DEV_NUMBERS_RUBRIC && OLOID_DEV_NUMBER_FACTS.length
+      ? pickLeastRecent(OLOID_DEV_NUMBER_FACTS, mergeLastUsed(devFactUsed, projectHistory.map((item) => ({ id: item.devFactId, at: item.at }))))
+      : undefined;
+  if (rubric.id === OLOID_DEV_NUMBERS_RUBRIC && !devFact) {
+    return { project, rubricId: rubric.id, topic, topicTag, text: null, rejected: [DEV_NUMBERS_SKIP], skipReason: DEV_NUMBERS_SKIP, tone, regularCount };
+  }
+  if (devFact) topic = devFact.label;
+  const line = rubric.id === OLOID_LINE_RUBRIC
+    ? pickCharacterLine(mergeLastUsed(lineUsed, projectHistory.map((item) => ({ id: item.lineId, at: item.at }))))
+    : null;
+
   // Заглушка в адресе: автоматический слот не генерируем и не публикуем. Явное превью рубрики текст всё же собирает.
   if (rubric.id === OLOID_VKPLAY_RUBRIC && vkPlayUrlBlocked() && forcedRubric !== OLOID_VKPLAY_RUBRIC) {
-    return { project, rubricId: rubric.id, topic, topicTag, text: null, rejected: [OLOID_VKPLAY_SKIP_REASON], skipReason: OLOID_VKPLAY_SKIP_REASON };
+    return { project, rubricId: rubric.id, topic, topicTag, text: null, rejected: [OLOID_VKPLAY_SKIP_REASON], skipReason: OLOID_VKPLAY_SKIP_REASON, tone };
   }
-  const picture = rubric.media ? undefined : pickPicture(project, rubric, topic, history);
-  const media: Media | undefined = rubric.media ?? (picture && { type: "IMAGE", url: picture.url });
+  // Опрос — только текст. Картинка к poll_attachment не клеится.
+  // Карусель и ролик — только обычный пост, по теме из README, кто дольше не выходил.
+  // Трейлер, магазины и цифры сюда не попадают: у трейлера своё видео и свой срок.
+  const askFromHistory = projectHistory.find((item) => item.rubric === OLOID_ASK_RUBRIC);
+  const askWasPoll = lastAskWasPoll ?? (askFromHistory ? askFromHistory.poll === true : null);
+  const wantPoll = rubric.id === OLOID_ASK_RUBRIC && askWasPoll !== true;
+  const shown =
+    rotation && !wantPoll && !rubric.media
+      ? pickRegularShown(
+          rubric.id,
+          topic,
+          mergeLastUsed(mediaUsed, projectHistory.map((item) => ({ id: item.mediaId, at: item.at }))),
+        )
+      : null;
+  const picture = rubric.media || wantPoll || shown ? undefined : pickPicture(project, rubric, topic, history);
+  const media: Media | undefined = rubric.media ?? shown?.media ?? (picture && { type: "IMAGE", url: picture.url });
   const detective = project.id === "buro" ? pickDetectiveRef(history, project.forceNextRef) : undefined;
   const promoCode = promoCodeForRubric(rubric.id, nextCode, promoScheduled, forcedRubric);
   const promoLeft = promoCode ? OLOID_APP_STORE_CODES.length - spent.length - 1 : undefined;
-  const base = { project, rubricId: rubric.id, topic, topicTag, media, promoCode, promoLeft };
+  const base = {
+    project,
+    rubricId: rubric.id,
+    topic,
+    topicTag,
+    media,
+    promoCode,
+    promoLeft,
+    quiet,
+    dateHook: dateHook?.id,
+    devFactId: devFact?.id,
+    lineId: line?.id,
+    tone,
+    regularCount,
+    mediaId: shown?.id,
+  };
 
   if (rubric.id === OLOID_APP_STORE_PROMO_RUBRIC && !promoCode) {
     const why = usedAppStoreCodes === null ? "список кодов в Redis недоступен, код не показываю" : "коды App Store закончились";
@@ -274,11 +406,21 @@ export async function makeDraft(opts: {
 
   let feedback: string | undefined;
   const rejected: string[] = [];
+  const hints = {
+    quiet,
+    toneNote: tone ? toneNoteForRubric(tone, rubric.id) : undefined,
+    dateSteer: dateHook?.steer,
+    devFact: devFact?.text,
+    wantPoll,
+    characterLine: line ? `${line.speaker}: «${line.line}». ${line.note}` : undefined,
+    shownNote: shown?.note,
+  };
 
   for (let i = 0; i < MAX_ATTEMPTS; i++) {
-    const candidate = await draftPost(project, rubric, history, now, feedback, topic, channel.voiceNote, linkContent, picture?.about, detective?.hint, promoCode);
+    const drafted = await draftPost(project, rubric, history, now, feedback, topic, channel.voiceNote, linkContent, picture?.about, detective?.hint, promoCode, hints);
+    const candidate = drafted.text;
     const problem =
-      ruleCheck(candidate, project, now, rubric, linkContent, promoCode) ??
+      ruleCheck(candidate, project, now, rubric, linkContent, promoCode, quiet, devFact?.text) ??
       appStoreCodeProblem(candidate, project.id, rubric.id, promoCode) ??
       appStorePriceProblem(candidate, project.id, rubric.id) ??
       appStoreMomentProblem(candidate, project.id, rubric.id) ??
@@ -286,10 +428,21 @@ export async function makeDraft(opts: {
       (detective ? detectiveRefProblem(candidate, history, detective) : null) ??
       repeatedEnding(candidate, history, project.id) ??
       tooSimilar(candidate, history) ??
-      (await factCheck(candidate, project, picture?.about, now, { rubricId: rubric.id, promoCode }));
-    if (!problem) return { ...base, text: candidate, rejected };
-    feedback = problem;
-    rejected.push(`${problem}: ${candidate}`);
+      (await factCheck(candidate, project, shown?.note ?? picture?.about, now, { rubricId: rubric.id, promoCode, devFact: devFact?.text, quiet }));
+    if (problem) {
+      feedback = problem;
+      rejected.push(`${problem}: ${candidate}`);
+      continue;
+    }
+    const pollErr = wantPoll ? pollOptionsProblem(drafted.options) : null;
+    if (pollErr && i < MAX_ATTEMPTS - 1) {
+      feedback = pollErr;
+      rejected.push(`${pollErr}: ${candidate}`);
+      continue;
+    }
+    const poll = wantPoll && !pollErr && drafted.options ? toPollAttachment(drafted.options) : undefined;
+    if (pollErr) rejected.push(`опрос снят, пост без опроса: ${pollErr}: ${candidate}`);
+    return { ...base, text: candidate, poll, rejected };
   }
   return { ...base, text: null, rejected };
 }

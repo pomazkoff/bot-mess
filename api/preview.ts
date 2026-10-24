@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { appStorePromoOpen, makeDraft } from "../lib/run.js";
 import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_UNTIL, spentAppStoreCodes } from "../lib/projects.js";
-import { getAppStoreCodesUsed, getAppStoreDay, getHistory, getLastProject, getVkPlayDay } from "../lib/store.js";
+import { getAppStoreCodesUsed, getAppStoreDay, getHistory, getLastProject, getOloidRotationState, getVkPlayDay } from "../lib/store.js";
 import { notify } from "../lib/notify.js";
 import { channelById } from "../lib/channels.js";
 
@@ -59,7 +59,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const usedAppStoreCodes = channel.projects.includes("oloid")
       ? await getAppStoreCodesUsed("oloid", OLOID_APP_STORE_CODES).catch((e) => ((redis = String(e?.message ?? e)), null))
       : [];
-    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason } = await makeDraft({
+    const rotation = channel.projects.includes("oloid")
+      ? await getOloidRotationState("oloid").catch((e) => ((redis = String(e?.message ?? e)), null))
+      : null;
+    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, tone, mediaId } = await makeDraft({
       channel,
       history,
       lastProject,
@@ -70,13 +73,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       dailyDoneDate,
       secondDailyDoneDate,
       usedAppStoreCodes,
+      rubricUsed: rotation?.rubricUsed,
+      devFactUsed: rotation?.devFactUsed,
+      lineUsed: rotation?.lineUsed,
+      regularCount: rotation?.regularCount,
+      dateHooks: rotation?.dateHooks,
+      lastAskWasPoll: rotation?.lastAskWasPoll,
+      mediaUsed: rotation?.mediaUsed,
     });
     const promoLine = promoCode != null ? `\nПромокод: ${promoCode}. Осталось бы: ${promoLeft}. Код не списан.` : "";
     const telegram =
       req.query.notify === "1"
-        ? await notify(`🧪 Превью, НЕ опубликовано (${channel.name} · ${project.name}, ${rubricId}${media ? (media.type === "VIDEO" ? ", с видео" : ", с картинкой") : ""}):${promoLine}\n\n${skipReason ?? text ?? "ни один вариант не прошёл проверки"}`)
+        ? await notify(`🧪 Превью, НЕ опубликовано (${channel.name} · ${project.name}, ${rubricId}${media ? (media.type === "CAROUSEL" ? ", с каруселью" : media.type === "VIDEO" ? ", с видео" : ", с картинкой") : ""}):${promoLine}\n\n${skipReason ?? text ?? "ни один вариант не прошёл проверки"}`)
         : undefined;
-    return res.json({ preview: true, redis, telegram, history: history.length, channel: channel.id, project: project.id, rubric: rubricId, topic, topicTag, media: media?.url, promoCode, promoLeft, skipped: skipReason, text, length: text?.length, rejected });
+    return res.json({
+      preview: true,
+      redis,
+      telegram,
+      history: history.length,
+      channel: channel.id,
+      project: project.id,
+      rubric: rubricId,
+      topic,
+      topicTag,
+      media: media?.type === "CAROUSEL" ? media.urls : media?.url,
+      mediaId,
+      promoCode,
+      promoLeft,
+      quiet,
+      poll,
+      dateHook,
+      devFactId,
+      tone,
+      skipped: skipReason,
+      text,
+      length: text?.length,
+      rejected,
+    });
   } catch (e: any) {
     return res.status(500).json({ error: String(e?.message ?? e) });
   }

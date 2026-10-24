@@ -1,4 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { OLOID_DEV_NUMBERS_RUBRIC, devNumberProblem } from "./devFacts.js";
+import { isOloidRotationRubric, quietProblem, rotationSafetyProblem } from "./oloidRotation.js";
 import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, factsFor, forbiddenFor, mentionsPrice, mskCalendarDay, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC, OLOID_VKPLAY_FROM, OLOID_VKPLAY_RUBRIC, oloidRedeemUrl, promoActive, redactAppStoreCodes, type DetectiveRef, type Project, type Rubric } from "./projects.js";
 import type { HistoryItem } from "./store.js";
 
@@ -26,6 +28,16 @@ async function askJson<T>(system: string, user: string, schema: Record<string, u
 
 // ---------- Генерация ----------
 
+export type DraftHints = {
+  quiet?: boolean; // без ссылки и без призыва
+  toneNote?: string;
+  dateSteer?: string;
+  devFact?: string; // единственный числовой факт рубрики dev-numbers
+  wantPoll?: boolean;
+  characterLine?: string;
+  shownNote?: string; // карусель или ролик: описать видимое
+};
+
 export async function draftPost(
   p: Project,
   rubric: Rubric,
@@ -38,16 +50,20 @@ export async function draftPost(
   pictureNote?: string, // что на приложенной картинке
   detectiveHint?: string, // заданная мемная отсылка «Бюро» (стиль, не факт)
   promoCode?: string, // один код только этого поста; в систему и в другие рубрики не попадает
-) {
+  hints?: DraftHints,
+): Promise<{ text: string; options?: string[] }> {
   // Код и redeem-ссылка — только у appstore-promo. В остальные рубрики код не попадает, даже если его передали.
   const code = rubric.id === OLOID_APP_STORE_PROMO_RUBRIC ? promoCode : undefined;
   const link = code ? oloidRedeemUrl(code) : (rubric.link ?? p.link)(now, linkContent);
   const recent = history
     .filter((h) => h.project === p.id)
     .slice(0, 12)
-    .map((h) => `— ${redactAppStoreCodes(h.text)}`)
+    .map((h) => `— ${redactAppStoreCodes(h.text)}${h.pollOptions?.length ? ` [опрос: ${h.pollOptions.join(" | ")}]` : ""}`)
     .join("\n");
   const season = p.seasonalHint?.(now);
+  const quiet = hints?.quiet === true;
+  const wantPoll = hints?.wantPoll === true;
+  const jsonShape = wantPoll ? '{"text": "текст поста", "options": ["вариант", "вариант"]}' : '{"text": "текст поста"}';
 
   const system = `Ты пишешь посты для Threads от лица автора проекта «${p.name}». Пишешь по-русски.
 
@@ -63,37 +79,63 @@ ${forbiddenFor(p, rubric.id, now).map((f) => `• ${f}`).join("\n")}
 ${p.id === "buro" ? "\nМемная отсылка к детективному фильму, сериалу или персонажу — шутка в голосе, не утверждение о проекте. Цитату не выдавай за факт о «Бюро», не приписывай чужому герою и не намекай, что сервис сделан по этому фильму.\n" : ""}
 
 ФОРМАТ: до ${MAX_LEN} символов вместе со ссылкой${p.id === "oloid" ? " (пустые строки между абзацами тоже считаются — пиши короткими абзацами по одной-две связанные фразы, не разбивай каждую фразу отдельной строкой)" : ""}. Живой текст, не пресс-релиз. Ответь ТОЛЬКО JSON без markdown:
-{"text": "текст поста"}`;
+${jsonShape}`;
+
+  const linkLine = quiet
+    ? "Ссылку не ставь и не показывай адрес. Не зови скачать, зайти на сайт, перейти или поиграть по ссылке. Это разговор: наблюдение или вопрос читателю. Последняя строка — не приглашение на сайт, даже если голос выше просит приглашение."
+    : p.requireLink
+      ? `Обязательно поставь в конце ссылку ровно так, без изменений: ${link}`
+      : rubric.id === "question"
+        ? "Ссылку не ставь."
+        : `Если уместно, поставь в конце ссылку ровно так, без изменений: ${link}`;
 
   const user = `Рубрика: ${rubric.brief}
 ${topic ? `Тема поста: ${topic}` : ""}
-${pictureNote ? `К посту будет приложена картинка из игры: ${pictureNote}. Можно опереться на одну её деталь; не описывай картинку целиком, не пиши «на картинке» и не добавляй того, чего на ней нет.` : ""}
-${p.requireLink ? `Обязательно поставь в конце ссылку ровно так, без изменений: ${link}` : rubric.id === "question" ? "Ссылку не ставь." : `Если уместно, поставь в конце ссылку ровно так, без изменений: ${link}`}
+${hints?.toneNote ? `Тон слота: ${hints.toneNote}` : ""}
+${hints?.dateSteer ? `Повод дня (одна обычная публикация, без новых фактов): ${hints.dateSteer}` : ""}
+${hints?.devFact ? `ЕДИНСТВЕННЫЙ числовой факт этого поста. Другие числа из фактов проекта не копируй:\n• ${hints.devFact}` : ""}
+${hints?.characterLine ? `Единственная допустимая реплика, дословно и в кавычках: ${hints.characterLine}` : ""}
+${hints?.shownNote ? hints.shownNote : pictureNote ? `К посту будет приложена картинка из игры: ${pictureNote}. Можно опереться на одну её деталь; не описывай картинку целиком, не пиши «на картинке» и не добавляй того, чего на ней нет.` : ""}
+${wantPoll ? "К посту будет опрос Threads: 2–4 варианта, каждый от 1 до 25 символов, без цифр, ссылок, цены и спойлеров. Варианты — короткие ответы читателя, не факты об игре. В тексте задай вопрос и не перечисляй варианты списком." : ""}
+${linkLine}
 ${code ? `Единственный код этого поста — вставь отдельной строкой ровно так, без изменений: ${code}\nЭто одноразовая бесплатная загрузка в App Store: код вводят там же, забирает первый. Других кодов нет и выдумывать их нельзя. Код оставь и в тексте отдельной строкой, без ссылки вокруг: его копируют вручную. Коротко скажи, что нажатие на ссылку само подставит код в App Store. Призыв в конце своими словами: скачать, поиграть и оставить отзыв. Фразу «скачай — поиграй — оставь отзыв» не копируй. Цену не упоминать.` : ""}
 ${season ? `Сезонный повод (по желанию): ${season}` : ""}
 ${detectiveHint ? `Обязательная отсылка в этом посте (мем, не факт о проекте и не связь с фильмом): ${detectiveHint}` : ""}
 
-Недавние посты — НЕ повторяй их заходы, формулировки, структуру${p.id === "buro" ? " и мемную детективную отсылку" : ""}${p.id === "oloid" ? " и последнюю строку перед ссылкой" : ""}:
+Недавние посты — НЕ повторяй их заходы, формулировки, структуру${p.id === "buro" ? " и мемную детективную отсылку" : ""}${p.id === "oloid" ? (quiet ? " и последнюю строку" : " и последнюю строку перед ссылкой") : ""}:
 ${recent || "(пока нет)"}
 ${oloidEndingHint(p.id, history)}
 ${feedback ? `\nПредыдущий вариант отклонён: ${feedback}. Исправь.` : ""}`;
 
-  const { text } = await askJson<{ text: string }>(system, user, {
-    type: "object",
-    properties: { text: { type: "string" } },
-    required: ["text"],
-    additionalProperties: false,
-  });
-  const trimmed = text.trim();
+  const parsed = await askJson<{ text: string; options?: string[] }>(
+    system,
+    user,
+    wantPoll
+      ? {
+          type: "object",
+          properties: { text: { type: "string" }, options: { type: "array", items: { type: "string" } } },
+          required: ["text", "options"],
+          additionalProperties: false,
+        }
+      : {
+          type: "object",
+          properties: { text: { type: "string" } },
+          required: ["text"],
+          additionalProperties: false,
+        },
+  );
+  const trimmed = parsed.text.trim();
   // Формат — до ruleCheck: пустые строки входят в лимит 450.
   // Сначала вёрстка (края строк), потом строчные: заглавная должна стоять в начале строки, а не после пробелов.
-  return p.id === "oloid" ? lowercaseSentenceStarts(normalizeOloidParagraphs(trimmed)) : trimmed;
+  const text = p.id === "oloid" ? lowercaseSentenceStarts(normalizeOloidParagraphs(trimmed)) : trimmed;
+  const options = wantPoll ? parsed.options?.map((option) => option.trim()).filter(Boolean) : undefined;
+  return { text, options };
 }
 
 // Строчный стиль «Олоида»: первая буква поста, строки и фразы — строчная.
 // Имена собственные из короткого списка не трогаем. Середину фразы не переписываем.
 const OLOID_PROPER =
-  /^(?:олоид\p{L}*|егор\p{L}*|яковлев\p{L}*|disco|elysium|steam|android|ios|app|серафим\p{L}*|павловн\p{L}*|конюшенн\p{L}*|исаакиевск\p{L}*|зайчик\p{L}*|петербург(?:а|у|е|ом)?|санкт-петербург(?:а|у|е|ом)?|питер(?:а|у|е|ом)?|лиза|лизы|лизе|лизу|лизой|витя|вити|вите|витю|витей|тонет(?:а|у|е|ом)|vk)$/iu;
+  /^(?:олоид\p{L}*|егор\p{L}*|яковлев\p{L}*|вер(?:а|ы|е|у|ой)|алик(?:а|у|ом|е)?|фед(?:я|и|е|ю|ей)|следовател\p{L}*|старушк\p{L}*|бабушк\p{L}*|сон(?:я|и|е|ю|ей)|disco|elysium|steam|android|ios|app|серафим\p{L}*|павловн\p{L}*|конюшенн\p{L}*|исаакиевск\p{L}*|зайчик\p{L}*|петербург(?:а|у|е|ом)?|санкт-петербург(?:а|у|е|ом)?|питер(?:а|у|е|ом)?|лиза|лизы|лизе|лизу|лизой|витя|вити|вите|витю|витей|тонет(?:а|у|е|ом)|ren|vk)$/iu;
 
 export function lowercaseSentenceStarts(text: string): string {
   const urls: string[] = [];
@@ -114,6 +156,8 @@ export function lowercaseSentenceStarts(text: string): string {
       const rest = whole.slice(offset + lead.length + quotes.length);
       if (/^Что было, то и будет/iu.test(rest)) return full;
       const word = rest.match(/^\p{L}+(?:-\p{L}+)?/u)?.[0] ?? first;
+      // Фраза «ИИ использовался как инструмент» должна остаться с заглавными ИИ, не «Ии».
+      if (/^ии$/iu.test(word)) return lead + quotes + "ИИ";
       const head = first + restCaps;
       if (OLOID_PROPER.test(word)) {
         // «ПЕТЕРБУРГ» → «Петербург»; латиницу вроде VK не трогаем
@@ -124,6 +168,10 @@ export function lowercaseSentenceStarts(text: string): string {
       if (head === word && /^\p{Lu}{2,}$/u.test(word)) return lead + quotes + word.toLowerCase();
       return lead + quotes + first.toLowerCase() + restCaps;
     },
+  ).replace(
+    // Строчное «ии» в начале фразы тоже поднимаем до «ИИ»: regex выше ловит только заглавную.
+    /(^|[\n\r]|[.!?…]+[^\S\n]*)([«"„“']*)ии(?![\p{L}])/giu,
+    (_full, lead: string, quotes: string) => `${lead}${quotes}ИИ`,
   );
   return fixed
     .replace(/\uE000(\d+)\uE000/g, (_m, i: string) => urls[Number(i)])
@@ -159,7 +207,16 @@ const BANNED = [
   /sex\s*tape/i, /секс[-\s]?тейп/iu, /(?<![\p{L}])порн/iu,
 ];
 
-export function ruleCheck(text: string, p: Project, now: Date, rubric?: Rubric, linkContent?: string, promoCode?: string): string | null {
+export function ruleCheck(
+  text: string,
+  p: Project,
+  now: Date,
+  rubric?: Rubric,
+  linkContent?: string,
+  promoCode?: string,
+  quiet = false,
+  devFact?: string,
+): string | null {
   if (!text) return "пустой текст";
   if (text.length > MAX_LEN) return `длина ${text.length} > ${MAX_LEN}`;
   if ((text.match(EMOJI) || []).length > 1) return "больше одного эмодзи";
@@ -169,6 +226,16 @@ export function ruleCheck(text: string, p: Project, now: Date, rubric?: Rubric, 
     if (!rubric || !p.promo.rubrics.includes(rubric.id)) return `промокод ${p.promo.code} — только в постах-предложениях, здесь убери`;
   }
   for (const re of p.stopList ?? []) if (re.test(text)) return `штамп ${re} — перепиши фразу целиком, не синонимом`;
+  if (rubric) {
+    const safety = rotationSafetyProblem(text, rubric.id);
+    if (safety) return safety;
+  }
+  if (devFact) {
+    const numbers = devNumberProblem(text, devFact);
+    if (numbers) return numbers;
+  }
+  // Тихий обычный пост: ссылка не обязательна и запрещена. Остальные посты — как раньше.
+  if (quiet) return quietProblem(text);
   const urls = text.match(/https?:\/\/\S+/g) || [];
   // Белый список — ровно одна ссылка. Обычный App Store: страница приложения.
   // Redeem-ссылка разрешена только рубрике appstore-promo и только с заданным кодом. В остальные посты не пускаем.
@@ -379,9 +446,23 @@ function vkPlayFactNote(rubricId?: string): string {
   return "Это пост рубрики VK Play. Факт, не отклоняй: «Олоид» вышел на VK Play. Ссылку в конце не отклоняй: это страница игры на VK Play, UTM нет специально. «Олоид» — мистическая визуальная новелла, не хоррор: «хоррор», horror и «ужастик» отклоняй. Пожар, огонь, финал, концовки, скелет, убийц и кадр «олоид на ладони» отклоняй. Яркий момент из фактов и кадра можно. Цену не упоминать. Если в посте есть цена — отклоняй. Про ИИ допустима только фраза «ИИ использовался как инструмент»; другие формулировки про нейросети отклоняй. Промокоды отклоняй.\n";
 }
 
+function rotationFactNote(rubricId?: string, devFact?: string, quiet?: boolean): string {
+  if (!rubricId || !isOloidRotationRubric(rubricId)) return "";
+  let note =
+    "Это обычный пост, не магазин. Хоррор, horror, ужастик, пожар, огонь, финал, концовку, скелет, достижения, выборы игрока, тайную комнату и природу артефакта — отклоняй. Про ИИ допустима только фраза «ИИ использовался как инструмент».\n";
+  if (quiet) note += "Ссылки нет специально. Не отклоняй из-за отсутствия ссылки. Призыв скачать, зайти на сайт или перейти по ссылке — отклоняй.\n";
+  if (devFact) {
+    note += `Единственные допустимые числа — из этой строки, и никакие другие:\n• ${devFact}\nЧисло, которого нет в этой строке, — отклоняй. Часы прохождения 2–3 в этот пост не входят.\n`;
+  }
+  return note;
+}
+
 function oloidCheckNote(rubricId?: string, now = new Date()): string {
   const style =
     "Строчные буквы (кроме имён собственных), один восклицательный знак в первой строке и короткие абзацы (одна-две связанные фразы на строке, не больше трёх; между абзацами пустая строка; ссылка отдельной строкой после пустой) — заданный стиль, не отклоняй из-за этого.\nСсылка на apps.apple.com/ru/app/id6817809325 — официальная страница «Олоида» в App Store. Если она стоит в посте, не отклоняй из-за неё: UTM нет специально. ";
+  if (rubricId === OLOID_DEV_NUMBERS_RUBRIC) {
+    return `${style}Это пост «цифры разработки». Цену не упоминать. Числа, которых нет в отдельном выбранном факте, отклоняй — в том числе 500 ₽, 2–3 часа, около 1600 реплик и 45 статей, даже если они есть в общих фактах.\n`;
+  }
   if (rubricId === OLOID_VKPLAY_RUBRIC) {
     return `${style}«Вышло на VK Play» — факт этого поста, не отклоняй. Выход на Android или Steam — нет. Цену не упоминать. Если в посте есть цена — отклоняй.\n`;
   }
@@ -400,11 +481,11 @@ export async function factCheck(
   p: Project,
   pictureNote?: string,
   now = new Date(),
-  opts?: { rubricId?: string; promoCode?: string },
+  opts?: { rubricId?: string; promoCode?: string; devFact?: string; quiet?: boolean },
 ): Promise<string | null> {
   const r = await askJson<{ ok: boolean; reason: string }>(
     `Ты строгий редактор-фактчекер. Проверь пост о проекте «${p.name}».
-${p.id === "oloid" ? oloidCheckNote(opts?.rubricId, now) : ""}${appStoreFactNote(opts?.rubricId, opts?.promoCode)}${vkPlayFactNote(opts?.rubricId)}${p.id === "buro" ? `Отсылки к детективам — стиль и шутка, не факты о проекте. Допустимы только эти якоря, каждый своим героем:\n${BURO_DETECTIVE_REFS.map((ref) => `• ${ref.hint}`).join("\n")}\nНе отклоняй такую шутку, если она узнаваемая и не приписана чужому персонажу. Отклоняй, если пост утверждает, что сервис основан на фильме, снят по нему или связан с правообладателем, если цитата приписана не тому герою, если раскрыта развязка или описана жестокость, или если шутка непристойная.\n` : ""}Допустимые факты:
+${p.id === "oloid" ? oloidCheckNote(opts?.rubricId, now) : ""}${rotationFactNote(opts?.rubricId, opts?.devFact, opts?.quiet)}${appStoreFactNote(opts?.rubricId, opts?.promoCode)}${vkPlayFactNote(opts?.rubricId)}${p.id === "buro" ? `Отсылки к детективам — стиль и шутка, не факты о проекте. Допустимы только эти якоря, каждый своим героем:\n${BURO_DETECTIVE_REFS.map((ref) => `• ${ref.hint}`).join("\n")}\nНе отклоняй такую шутку, если она узнаваемая и не приписана чужому персонажу. Отклоняй, если пост утверждает, что сервис основан на фильме, снят по нему или связан с правообладателем, если цитата приписана не тому герою, если раскрыта развязка или описана жестокость, или если шутка непристойная.\n` : ""}Допустимые факты:
 ${factsFor(p, now, opts?.rubricId).map((f) => `• ${f}`).join("\n")}
 Запрещено:
 ${forbiddenFor(p, opts?.rubricId, now).map((f) => `• ${f}`).join("\n")}
