@@ -125,7 +125,7 @@ export async function publishDueScheduled(ch: Channel, now: Date, dry: boolean):
         publishedId = already;
       } else {
         try {
-          publishedId = await publishPost(ch, post.text, post.topicTag, post.media);
+          publishedId = (await publishPost(ch, post.text, post.topicTag, post.media)).id;
         } catch (e) {
           if (!postAlreadyPublished(e)) throw e;
           publishedId = (await findRecentPostByText(ch, post.text, null).catch(() => null)) ?? "already-published";

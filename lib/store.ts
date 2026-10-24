@@ -34,9 +34,15 @@ export type HistoryItem = {
   text: string;
   topic?: string; // тема из списка рубрики (чтобы не повторять)
   topicTag?: string; // тема Threads, с которой вышел пост
-  media?: string; // ссылка на прикреплённое видео
+  media?: string; // ссылка на прикреплённое видео или картинку
   postId?: string;
   at: string;
+  quiet?: boolean; // обычный пост без ссылки и без призыва
+  poll?: boolean; // к посту ушёл опрос
+  pollOptions?: string[];
+  dateHook?: string; // id повода из календаря обычных постов
+  devFactId?: string; // id факта рубрики «цифры разработки»
+  lineId?: string; // id реплики рубрики «реплика дня»
 };
 
 const K = {
@@ -147,4 +153,69 @@ export async function claimScheduled(id: string): Promise<boolean> {
 
 export async function releaseScheduledClaim(id: string): Promise<void> {
   await (await db()).del(scheduledLockKey(id));
+}
+
+// Очередь обычных постов «Олоида». Пишется только после успешной публикации.
+const rubricUsedKey = (projectId: string) => `threads:rubric_used:${projectId}`;
+const devFactUsedKey = (projectId: string) => `threads:dev_fact_used:${projectId}`;
+const lineUsedKey = (projectId: string) => `threads:line_used:${projectId}`;
+const regularCountKey = (projectId: string) => `threads:regular_count:${projectId}`;
+const dateHookKey = (projectId: string) => `threads:date_hook:${projectId}`;
+const askPollKey = (projectId: string) => `threads:ask_poll:${projectId}`;
+
+export type OloidRotationState = {
+  rubricUsed: Record<string, string>;
+  devFactUsed: Record<string, string>;
+  lineUsed: Record<string, string>;
+  regularCount: number | null;
+  /** id повода → дата МСК, когда он уже вышел. */
+  dateHooks: Record<string, string>;
+  /** null — опроса «вопрос к вам» ещё не было. */
+  lastAskWasPoll: boolean | null;
+};
+
+export async function getOloidRotationState(projectId: string): Promise<OloidRotationState> {
+  const c = await db();
+  const [rubricUsed, devFactUsed, lineUsed, regularRaw, dateHooks, askPoll] = await Promise.all([
+    c.hGetAll(rubricUsedKey(projectId)),
+    c.hGetAll(devFactUsedKey(projectId)),
+    c.hGetAll(lineUsedKey(projectId)),
+    c.get(regularCountKey(projectId)),
+    c.hGetAll(dateHookKey(projectId)),
+    c.get(askPollKey(projectId)),
+  ]);
+  const regularCount = regularRaw == null || regularRaw === "" ? null : Number(regularRaw);
+  return {
+    rubricUsed,
+    devFactUsed,
+    lineUsed,
+    regularCount: regularCount != null && Number.isFinite(regularCount) ? regularCount : null,
+    dateHooks,
+    lastAskWasPoll: askPoll == null ? null : askPoll === "1",
+  };
+}
+
+export async function saveOloidRotation(
+  projectId: string,
+  patch: {
+    rubricId: string;
+    at: string;
+    regularCount: number;
+    dateHook?: string;
+    dateMsk?: string;
+    devFactId?: string;
+    lineId?: string;
+    askPoll?: boolean;
+  },
+): Promise<void> {
+  const c = await db();
+  const ops: Promise<unknown>[] = [
+    c.hSet(rubricUsedKey(projectId), patch.rubricId, patch.at),
+    c.set(regularCountKey(projectId), String(patch.regularCount)),
+  ];
+  if (patch.dateHook && patch.dateMsk) ops.push(c.hSet(dateHookKey(projectId), patch.dateHook, patch.dateMsk));
+  if (patch.devFactId) ops.push(c.hSet(devFactUsedKey(projectId), patch.devFactId, patch.at));
+  if (patch.lineId) ops.push(c.hSet(lineUsedKey(projectId), patch.lineId, patch.at));
+  if (patch.askPoll != null) ops.push(c.set(askPollKey(projectId), patch.askPoll ? "1" : "0"));
+  await Promise.all(ops);
 }
