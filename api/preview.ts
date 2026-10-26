@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { appStorePromoOpen, makeDraft } from "../lib/run.js";
-import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_UNTIL, spentAppStoreCodes } from "../lib/projects.js";
+import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_FROM, OLOID_APP_STORE_PROMO_UNTIL, spentAppStoreCodes } from "../lib/projects.js";
 import { getAppStoreCodesUsed, getAppStoreDay, getHistory, getLastProject, getOloidRotationState, getProvocationDay, getProvocationState, getVkPlayDay } from "../lib/store.js";
 import { notify } from "../lib/notify.js";
 import { channelById } from "../lib/channels.js";
@@ -14,7 +14,7 @@ import { channelById } from "../lib/channels.js";
 // &rubric=vkplay — пост VK Play. Код и дату слота не списывает. Если в OLOID_VKPLAY_URL есть TODO, текст всё равно собирается, но крон такой пост не опубликует.
 // Без rubric бот сам берёт слот: утром App Store, с 15:00 МСК и с 2026-10-23 — VK Play, если App Store за сутки уже вышел, в 17:30–19:59 МСК — провокация, если магазины за сутки уже закрыты. Пока URL с TODO, автослот VK Play возвращает skipReason и ничего не генерирует.
 // &rubric=provocation — провокационный пост. Дату слота не списывает. Формат берётся по LRU, опрос и ссылка — по счётчику уже вышедших.
-// &codes=1 — без генерации: использованные и свободные коды (Redis + история). Ничего не списывает.
+// &codes=1 — без генерации: использованные и свободные коды (Redis, история и OLOID_APP_STORE_RETIRED_CODES). Ничего не списывает.
 // Ключи Redis: threads:appstore_day:oloid и threads:appstore_code:oloid:<КОД>.
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const key = process.env.PREVIEW_KEY;
@@ -27,12 +27,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const redisUsed = await getAppStoreCodesUsed("oloid", OLOID_APP_STORE_CODES).catch((e) => ((redis = String(e?.message ?? e)), null));
     const now = new Date();
     if (history === null || redisUsed === null) {
-      return res.json({ codes: true, promoUntil: OLOID_APP_STORE_PROMO_UNTIL, promoOpen: appStorePromoOpen(now), redis, used: null, unused: null });
+      return res.json({ codes: true, promoFrom: OLOID_APP_STORE_PROMO_FROM, promoUntil: OLOID_APP_STORE_PROMO_UNTIL, promoOpen: appStorePromoOpen(now), redis, used: null, unused: null });
     }
     const used = spentAppStoreCodes(redisUsed, history);
     const usedSet = new Set(used);
     const unused = OLOID_APP_STORE_CODES.filter((c) => !usedSet.has(c));
-    return res.json({ codes: true, promoUntil: OLOID_APP_STORE_PROMO_UNTIL, promoOpen: appStorePromoOpen(now), redis, used, unused });
+    return res.json({ codes: true, promoFrom: OLOID_APP_STORE_PROMO_FROM, promoUntil: OLOID_APP_STORE_PROMO_UNTIL, promoOpen: appStorePromoOpen(now), redis, used, unused });
   }
 
   const channel = channelById(typeof req.query.channel === "string" ? req.query.channel : undefined);

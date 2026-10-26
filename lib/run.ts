@@ -24,7 +24,7 @@ import {
   type PollAttachment,
   type SlotTone,
 } from "./oloidRotation.js";
-import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, mskCalendarDay, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_PROVOCATION_SLOT_HOUR_MSK, OLOID_PROVOCATION_SLOT_UNTIL_HOUR_MSK, OLOID_VKPLAY_RUBRIC, OLOID_VKPLAY_SKIP_REASON, OLOID_VKPLAY_SLOT_HOUR_MSK, PROJECTS, pickWeighted, spentAppStoreCodes, vkPlayUrlBlocked, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
+import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, mskCalendarDay, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_FROM, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_PROVOCATION_SLOT_HOUR_MSK, OLOID_PROVOCATION_SLOT_UNTIL_HOUR_MSK, OLOID_VKPLAY_RUBRIC, OLOID_VKPLAY_SKIP_REASON, OLOID_VKPLAY_SLOT_HOUR_MSK, PROJECTS, pickWeighted, spentAppStoreCodes, vkPlayUrlBlocked, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
 import type { HistoryItem } from "./store.js";
 import type { Channel } from "./channels.js";
 import { pickRegularShown } from "./variety.js";
@@ -71,12 +71,13 @@ export function mskHour(now: Date): number {
   return new Date(now.getTime() + MSK_OFFSET_MS).getUTCHours();
 }
 
-/** Автоматическая раздача кодов ещё включена: календарный день МСК не позже promoUntil, включительно. */
-export function appStorePromoOpen(now: Date, until = OLOID_APP_STORE_PROMO_UNTIL): boolean {
-  return mskDay(now) <= until;
+/** Автоматическая раздача кодов включена: день МСК в [from, until], оба включительно. */
+export function appStorePromoOpen(now: Date, until = OLOID_APP_STORE_PROMO_UNTIL, from = OLOID_APP_STORE_PROMO_FROM): boolean {
+  const day = mskDay(now);
+  return day >= from && day <= until;
 }
 
-/** Код попадает только в appstore-promo. После promoUntil — только в явное превью этой рубрики, не в другие посты. */
+/** Код попадает только в appstore-promo. Вне окна раздачи — только в явное превью этой рубрики, не в другие посты. */
 export function promoCodeForRubric(rubricId: string, nextCode: string | null, promoScheduled: boolean, forcedRubric?: string): string | undefined {
   if (rubricId !== OLOID_APP_STORE_PROMO_RUBRIC) return undefined;
   if (!promoScheduled && forcedRubric !== OLOID_APP_STORE_PROMO_RUBRIC) return undefined;
@@ -125,8 +126,9 @@ export function thirdDailyPending(project: Project, doneDate: string | null, now
  *  alternateEveryDays — не чаще раза в N суток: срок считается по всей истории проекта
  *  (allHistory, включая старые посты с другого аккаунта). Если срок вышел, следующий пост — эта рубрика.
  *  dailyRubric — первый пост за календарные сутки МСК, если dailyDoneDate не равен сегодняшнему дню.
- *  appStorePromo — этот слот appstore-promo. Вызывающий передаёт true, только пока день МСК не позже
- *  OLOID_APP_STORE_PROMO_UNTIL и есть неиспользованный код. Иначе слот — обычный appstore.
+ *  appStorePromo — этот слот appstore-promo. Вызывающий передаёт true, только пока день МСК внутри
+ *  OLOID_APP_STORE_PROMO_FROM…UNTIL и есть неснятый код. Иначе слот — обычный appstore.
+ *  Успешный appstore-promo закрывает тот же день, что dailyRubric: VK Play и провокация ждут его.
  *  secondDailyRubric — другой слот суток, не раньше secondDailyHourMsk, и только если dailyRubric за сегодня уже вышел.
  *  До этого часа и пока дневной пост не опубликован поведение прежнее: утро остаётся за App Store.
  *  thirdDailyRubric — слот внутри [thirdDailyHourMsk, thirdDailyUntilHourMsk). У «Олоида» это провокация
@@ -364,7 +366,7 @@ export async function makeDraft(opts: {
   const own = history.filter((h) => (h.channel ?? "pomazkof") === channel.id);
   const projectHistory = history.filter((h) => h.project === project.id);
   const promoScheduled = appStorePromoOpen(now);
-  // Код читаем для автоматического слота, пока дата открыта, и для явного превью appstore-promo после неё.
+  // Код читаем для автоматического слота внутри окна раздачи и для явного превью appstore-promo вне него.
   const previewPromo = forcedRubric === OLOID_APP_STORE_PROMO_RUBRIC;
   const canReadCodes = project.id === "oloid" && usedAppStoreCodes !== null;
   const spent = canReadCodes ? spentAppStoreCodes(usedAppStoreCodes, history) : [];

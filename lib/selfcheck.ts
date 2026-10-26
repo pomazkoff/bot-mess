@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import { OLOID_DEV_NUMBER_FACTS, OLOID_DEV_NUMBERS_RUBRIC, devNumberProblem, numberTokens } from "./devFacts.js";
-import { lowercaseSentenceStarts, provocationNumberProblem, repeatedEnding, ruleCheck } from "./generate.js";
+import { appStoreCodeProblem, appStoreMomentProblem, appStorePriceProblem, lowercaseSentenceStarts, provocationNumberProblem, repeatedEnding, ruleCheck } from "./generate.js";
 import {
   OLOID_DATE_HOOKS,
   OLOID_PROVOCATION_FORMATS,
@@ -20,10 +20,10 @@ import {
   rotationSafetyProblem,
   usedDateHookIds,
 } from "./oloidRotation.js";
-import { PROJECTS, factsFor } from "./projects.js";
-import { pickRubric } from "./run.js";
+import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_FROM, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RETIRED_CODES, PROJECTS, factsFor, nextAppStoreCode, oloidRedeemUrl, redactAppStoreCodes, spentAppStoreCodes } from "./projects.js";
+import { appStorePromoOpen, pickPicture, pickRubric } from "./run.js";
 import type { HistoryItem } from "./store.js";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pickRegularShown, shownAssetFiles } from "./variety.js";
 
@@ -264,6 +264,84 @@ assert.equal(
   null,
 );
 assert.ok(hotText.length <= 450 && hotLinked.length <= 450);
+
+const retired = OLOID_APP_STORE_RETIRED_CODES as readonly string[];
+const codes = OLOID_APP_STORE_CODES as readonly string[];
+const handed = ["LLLF94NXL73X", "FE7PNKXL4ET3", "WANF433KARPF", "3LY4TJJP34EM", "FRLW7XWWLN7N", "PLMF7ETTPWML", "APYAN4E4FRNH"];
+assert.equal(OLOID_APP_STORE_PROMO_FROM, "2026-10-27");
+assert.equal(OLOID_APP_STORE_PROMO_UNTIL, "2027-03-31");
+assert.equal(codes.length, 110);
+assert.equal(retired.length, 17);
+assert.equal(new Set(codes).size, codes.length);
+assert.deepEqual(codes.slice(0, 10), retired.slice(0, 10));
+assert.deepEqual(codes.slice(10, 17), handed);
+assert.equal(codes[17], "4N76T3WPKRYN");
+assert.equal(codes.at(-1), "NFEL377WMJE6");
+for (const code of codes) assert.match(code, /^[A-Z0-9]{12}$/, code);
+for (const code of retired) assert.equal(codes.includes(code), true, code);
+for (const code of handed) assert.equal(retired.includes(code), true, code);
+
+const spentEmpty = spentAppStoreCodes([], []);
+assert.deepEqual(spentEmpty, [...retired]);
+assert.equal(nextAppStoreCode([]), "4N76T3WPKRYN");
+assert.equal(nextAppStoreCode(spentEmpty), "4N76T3WPKRYN");
+assert.equal(codes.length - spentEmpty.length - 1, 92);
+assert.equal(nextAppStoreCode(spentAppStoreCodes(["4n76t3wpkryn"], [])), "9EWN4JPRHXHW");
+assert.equal(nextAppStoreCode(spentAppStoreCodes([], [{ project: "oloid", text: "код 4N76T3WPKRYN" }])), "9EWN4JPRHXHW");
+assert.equal(nextAppStoreCode(spentAppStoreCodes([], [{ project: "buro", text: "4N76T3WPKRYN" }])), "4N76T3WPKRYN");
+assert.equal(nextAppStoreCode(codes), null);
+for (const code of retired) assert.notEqual(nextAppStoreCode([]), code);
+assert.equal(redactAppStoreCodes("старый LW7EJRNPWFKF и ручной LLLF94NXL73X"), "старый [код] и ручной [код]");
+assert.equal(oloidRedeemUrl("4N76T3WPKRYN"), "https://apps.apple.com/redeem?code=4N76T3WPKRYN");
+
+const morning26 = new Date("2026-10-26T07:00:00.000Z"); // 10:00 МСК, раздачи ещё нет
+const morning27 = new Date("2026-10-27T07:00:00.000Z"); // 10:00 МСК, первый день
+const lastPromoDay = new Date("2027-03-31T20:59:00.000Z"); // 23:59 МСК
+const afterPromo = new Date("2027-03-31T21:00:00.000Z"); // 00:00 МСК 1 апреля
+assert.equal(appStorePromoOpen(morning26), false);
+assert.equal(appStorePromoOpen(morning27), true);
+assert.equal(appStorePromoOpen(lastPromoDay), true);
+assert.equal(appStorePromoOpen(afterPromo), false);
+assert.equal(pickRubric(oloid, [], morning26, undefined, [], null, appStorePromoOpen(morning26) && nextAppStoreCode(spentEmpty) != null, null).id, "appstore");
+assert.equal(pickRubric(oloid, [], morning27, undefined, [], null, true, null).id, "appstore-promo");
+assert.equal(pickRubric(oloid, [], morning27, undefined, [], null, false, null).id, "appstore");
+
+const slot15 = new Date("2026-10-27T12:00:00.000Z"); // 15:00 МСК
+const slot1730next = new Date("2026-10-27T14:30:00.000Z"); // 17:30 МСК
+const evening27 = new Date("2026-10-27T17:00:00.000Z"); // 20:00 МСК
+assert.equal(pickRubric(oloid, [], slot15, undefined, [], "2026-10-27", true, null).id, "vkplay");
+assert.equal(pickRubric(oloid, [], slot15, undefined, [], null, true, null).id, "appstore-promo");
+assert.equal(pickRubric(oloid, [], slot1730next, undefined, [], null, true, null).id, "appstore-promo");
+assert.equal(pickRubric(oloid, [], slot1730next, undefined, [], "2026-10-27", true, null).id, "vkplay");
+assert.equal(pickRubric(oloid, [], slot1730next, undefined, [], "2026-10-27", true, "2026-10-27", undefined, null).id, "provocation");
+assert.equal(pickRubric(oloid, [], evening27, undefined, [], "2026-10-27", true, "2026-10-27", undefined, "2026-10-27").id, "trailer");
+
+const promoRubric = oloid.rubrics.find((rubric) => rubric.id === "appstore-promo");
+assert.ok(promoRubric);
+const promoPicture = pickPicture(oloid, promoRubric, "код на бесплатную загрузку", []);
+assert.ok(promoPicture);
+assert.equal(oloid.appStorePictures?.some((picture) => picture.url === promoPicture.url), true);
+assert.equal(oloid.pictures?.some((picture) => picture.url === promoPicture.url), false);
+assert.equal(oloid.vkPlayPictures?.some((picture) => picture.url === promoPicture.url), false);
+const promoCode = "4N76T3WPKRYN";
+const promoText = `в наушниках коммуналка звучит ближе.\n\n${promoCode}\n\nбесплатная одноразовая загрузка: код забирает первый. нажатие на ссылку подставит его в App Store. скачайте, поиграйте и напишите пару слов.\n\n${oloidRedeemUrl(promoCode)}`;
+assert.equal(appStoreCodeProblem(promoText, "oloid", "appstore-promo", promoCode), null);
+assert.equal(appStorePriceProblem(promoText, "oloid", "appstore-promo"), null);
+assert.equal(appStoreMomentProblem(promoText, "oloid", "appstore-promo"), null);
+assert.ok(appStorePriceProblem(`${promoText}\n\nцена 500`, "oloid", "appstore-promo"));
+assert.ok(appStoreMomentProblem(`${promoText}\n\nэто эксклюзив App Store`, "oloid", "appstore-promo"));
+assert.equal(appStoreCodeProblem(`просто утро\n\n${promoCode}`, "oloid", "appstore"), `промокод ${promoCode} в этом посте не нужен — убери его`);
+
+const cronSrc = readFileSync(new URL("../api/cron.ts", import.meta.url), "utf8");
+const previewSrc = readFileSync(new URL("../api/preview.ts", import.meta.url), "utf8");
+assert.equal(previewSrc.includes("markAppStoreCodeUsed"), false);
+const dryIdx = cronSrc.indexOf("if (dry)");
+const publishIdx = cronSrc.indexOf("const postId = await publishPost");
+const markIdx = cronSrc.indexOf("if (promoCode) await markAppStoreCodeUsed");
+const dayIdx = cronSrc.indexOf("if (project.dailyRubric && appStoreSlot) await setAppStoreDay");
+assert.ok(dryIdx > 0 && publishIdx > dryIdx && dayIdx > publishIdx && markIdx > dayIdx);
+assert.equal(cronSrc.slice(0, publishIdx).includes("await markAppStoreCodeUsed"), false);
+assert.match(cronSrc, /const appStoreSlot = rubricId === OLOID_APP_STORE_RUBRIC \|\| rubricId === OLOID_APP_STORE_PROMO_RUBRIC/);
 
 console.log("selfcheck ok");
 console.log("--- sample backstage (not model) ---\n" + backstageText);

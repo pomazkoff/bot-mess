@@ -154,7 +154,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // После promoUntil код в Threads не публикуем, даже если генерация его собрала. В отчёт код не кладём.
+    // Вне окна раздачи код в Threads не публикуем, даже если генерация его собрала. В отчёт код не кладём.
     if (promoCode && !appStorePromoOpen(now)) {
       await notify(`⚠️ Threads-бот (${where}): раздача кодов App Store закрыта, пост с кодом не опубликован.`);
       return res.json({ posted: false, channel: channel.id, project: project.id, rubric: rubricId, rejected: ["раздача кодов App Store закрыта"] });
@@ -186,6 +186,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await setProvocationDay(project.id, mskDay(now));
       await saveProvocation(project.id, { formatId: provocationFormat, at: now.toISOString(), count: (provocationCount ?? 0) + 1 });
     }
+    // Код списывается только здесь: после успешного publishPost. Превью, dry и сбой публикации сюда не доходят.
     if (promoCode) await markAppStoreCodeUsed(project.id, promoCode);
     const pollOptions = poll && !pollDropped ? [poll.option_a, poll.option_b, poll.option_c, poll.option_d].filter((option): option is string => Boolean(option)) : undefined;
     if (isOloidRotationRubric(rubricId)) {
