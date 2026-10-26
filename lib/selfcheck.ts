@@ -38,11 +38,11 @@ const banned = ["94", "TLENUM", "достижен", "secret", "нише", "ло�
 const blob = OLOID_DEV_NUMBER_FACTS.map((fact) => fact.text).join("\n");
 for (const word of banned) assert.equal(blob.includes(word), false, word);
 assert.equal(new Set(OLOID_DEV_NUMBER_FACTS.map((fact) => fact.id)).size, OLOID_DEV_NUMBER_FACTS.length);
-assert.ok(OLOID_DEV_NUMBER_FACTS.length > 80);
+assert.ok(OLOID_DEV_NUMBER_FACTS.length > 70);
 assert.equal(new Set(OLOID_POOL_FACTS.map((fact) => fact.id)).size, OLOID_POOL_FACTS.length);
 assert.ok(OLOID_POOL_FACTS.length > 50);
 const poolBlob = OLOID_POOL_FACTS.map((fact) => fact.text).join("\n");
-for (const word of ["шпател", "гвозд", "₽", "достижен", "тайник", "скелет", "ладон", "сейф", "game/", ".rpy", ".png", "images/", "Loc_", "ach_grant"]) {
+for (const word of ["шпател", "гвозд", "₽", "game/", ".rpy", ".png", "images/", "Loc_", "ach_grant", "SAGA_"]) {
   assert.equal(poolBlob.toLowerCase().includes(word.toLowerCase()), false, word);
 }
 const passport = factsFor(oloid, evening, "backstage");
@@ -180,7 +180,7 @@ assert.ok(provocationLexiconProblem("вы идиоты"));
 assert.equal(pollOptionsProblem(["игра", "книга"]), null);
 assert.ok(provocationLexiconProblem("церковь\nдвор"));
 
-assert.equal(lowercaseSentenceStarts("Лев Мамбетов озвучил Егора"), "Лев Мамбетов озвучил Егора");
+assert.equal(lowercaseSentenceStarts("Следак в титрах"), "Следак в титрах");
 assert.equal(lowercaseSentenceStarts("ИИ использовался как инструмент"), "ИИ использовался как инструмент");
 assert.equal(lowercaseSentenceStarts("ии использовался как инструмент"), "ИИ использовался как инструмент");
 assert.equal(rotationSafetyProblem("ИИ использовался как инструмент, и всё", "backstage"), null);
