@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { appStorePromoOpen, makeDraft } from "../lib/run.js";
 import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_UNTIL, spentAppStoreCodes } from "../lib/projects.js";
-import { getAppStoreCodesUsed, getAppStoreDay, getHistory, getLastProject, getOloidRotationState, getVkPlayDay } from "../lib/store.js";
+import { getAppStoreCodesUsed, getAppStoreDay, getHistory, getLastProject, getOloidRotationState, getProvocationDay, getProvocationState, getVkPlayDay } from "../lib/store.js";
 import { notify } from "../lib/notify.js";
 import { channelById } from "../lib/channels.js";
 
@@ -12,7 +12,8 @@ import { channelById } from "../lib/channels.js";
 // &rubric=appstore — обычный пост App Store, ссылка на страницу приложения.
 // &rubric=appstore-promo — вариант с кодом: ссылка https://apps.apple.com/redeem?code=<КОД>, тот же код отдельной строкой в тексте. Код не списывается. Дату раздачи не смотрит.
 // &rubric=vkplay — пост VK Play. Код и дату слота не списывает. Если в OLOID_VKPLAY_URL есть TODO, текст всё равно собирается, но крон такой пост не опубликует.
-// Без rubric бот сам берёт слот: утром App Store, с 15:00 МСК и с 2026-10-23 — VK Play, если App Store за сутки уже вышел. Пока URL с TODO, автослот VK Play возвращает skipReason и ничего не генерирует.
+// Без rubric бот сам берёт слот: утром App Store, с 15:00 МСК и с 2026-10-23 — VK Play, если App Store за сутки уже вышел, в 17:30–19:59 МСК — провокация, если магазины за сутки уже закрыты. Пока URL с TODO, автослот VK Play возвращает skipReason и ничего не генерирует.
+// &rubric=provocation — провокационный пост. Дату слота не списывает. Формат берётся по LRU, опрос и ссылка — по счётчику уже вышедших.
 // &codes=1 — без генерации: использованные и свободные коды (Redis + история). Ничего не списывает.
 // Ключи Redis: threads:appstore_day:oloid и threads:appstore_code:oloid:<КОД>.
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -56,13 +57,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const secondDailyDoneDate = channel.projects.includes("oloid")
       ? await getVkPlayDay("oloid").catch((e) => ((redis = String(e?.message ?? e)), null))
       : null;
+    const provocationDoneDate = channel.projects.includes("oloid")
+      ? await getProvocationDay("oloid").catch((e) => ((redis = String(e?.message ?? e)), null))
+      : null;
+    const provocationState = channel.projects.includes("oloid")
+      ? await getProvocationState("oloid").catch((e) => ((redis = String(e?.message ?? e)), null))
+      : null;
     const usedAppStoreCodes = channel.projects.includes("oloid")
       ? await getAppStoreCodesUsed("oloid", OLOID_APP_STORE_CODES).catch((e) => ((redis = String(e?.message ?? e)), null))
       : [];
     const rotation = channel.projects.includes("oloid")
       ? await getOloidRotationState("oloid").catch((e) => ((redis = String(e?.message ?? e)), null))
       : null;
-    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, tone, mediaId } = await makeDraft({
+    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, tone, mediaId, provocationFormat } = await makeDraft({
       channel,
       history,
       lastProject,
@@ -72,6 +79,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       now: new Date(),
       dailyDoneDate,
       secondDailyDoneDate,
+      provocationDoneDate,
+      provocationCount: provocationState?.count,
+      provocationFormats: provocationState?.formats,
       usedAppStoreCodes,
       rubricUsed: rotation?.rubricUsed,
       devFactUsed: rotation?.devFactUsed,
@@ -104,6 +114,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       poll,
       dateHook,
       devFactId,
+      provocationFormat,
       tone,
       skipped: skipReason,
       text,

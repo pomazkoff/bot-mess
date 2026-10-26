@@ -4,19 +4,23 @@
 
 import assert from "node:assert/strict";
 import { OLOID_DEV_NUMBER_FACTS, OLOID_DEV_NUMBERS_RUBRIC, devNumberProblem, numberTokens } from "./devFacts.js";
-import { lowercaseSentenceStarts, ruleCheck } from "./generate.js";
+import { lowercaseSentenceStarts, provocationNumberProblem, repeatedEnding, ruleCheck } from "./generate.js";
 import {
   OLOID_DATE_HOOKS,
+  OLOID_PROVOCATION_FORMATS,
   eligibleRotationRubrics,
   matchingDateHook,
   oloidSlotTone,
   pickLeastRecent,
   pollOptionsProblem,
+  provocationHasLink,
+  provocationLexiconProblem,
+  provocationWantsPoll,
   regularPostIsQuiet,
   rotationSafetyProblem,
   usedDateHookIds,
 } from "./oloidRotation.js";
-import { PROJECTS } from "./projects.js";
+import { PROJECTS, factsFor } from "./projects.js";
 import { pickRubric } from "./run.js";
 import type { HistoryItem } from "./store.js";
 import { existsSync } from "node:fs";
@@ -120,6 +124,37 @@ assert.equal(
   "backstage",
 );
 
+const slot1730 = new Date("2026-10-26T14:30:00.000Z"); // 17:30 МСК
+const day1730 = "2026-10-26";
+assert.equal(pickRubric(oloid, [], slot1730, undefined, [], day1730, false, day1730, undefined, null).id, "provocation");
+assert.equal(pickRubric(oloid, [], slot1730, undefined, [], day1730, false, null).id, "vkplay");
+assert.equal(pickRubric(oloid, [], slot1730, undefined, [], null, false, day1730).id, "appstore");
+assert.equal(pickRubric(oloid, [], new Date("2026-10-26T16:59:00.000Z"), undefined, [], day1730, false, day1730, undefined, null).id, "provocation");
+const freshTrailer: HistoryItem = { ...recentTrailer, at: "2026-10-26T12:00:00.000Z" };
+assert.equal(pickRubric(oloid, [], new Date("2026-10-26T17:00:00.000Z"), undefined, [], day1730, false, day1730, undefined, null).id, "trailer");
+assert.equal(pickRubric(oloid, [freshTrailer], new Date("2026-10-26T17:00:00.000Z"), undefined, [freshTrailer], day1730, false, day1730, undefined, null).id, "backstage");
+assert.equal(pickRubric(oloid, [freshTrailer], slot1730, undefined, [freshTrailer], day1730, false, day1730, undefined, day1730).id, "backstage");
+assert.equal(
+  pickRubric(oloid, [oldTrailer], slot1730, undefined, [oldTrailer], day1730, false, day1730, { preferRegular: true }, null).id,
+  "provocation",
+);
+assert.equal(pickLeastRecent(OLOID_PROVOCATION_FORMATS, {}).id, "opinion");
+assert.equal(pickLeastRecent(OLOID_PROVOCATION_FORMATS, { opinion: "2026-10-26T14:30:00.000Z" }).id, "side");
+assert.equal(provocationWantsPoll(0), true);
+assert.equal(provocationWantsPoll(1), false);
+assert.equal(provocationWantsPoll(2), true);
+assert.equal(provocationHasLink(0), false);
+assert.equal(provocationHasLink(1), true);
+assert.equal(provocationHasLink(2), false);
+assert.equal(provocationLexiconProblem("выбор стороны и Вера на кухне"), null);
+assert.equal(provocationLexiconProblem("богатый двор и неграмотный ход"), null);
+assert.equal(provocationLexiconProblem("хачапури и хохлома"), null);
+assert.ok(provocationLexiconProblem("это уже политика"));
+assert.ok(provocationLexiconProblem("это религия"));
+assert.ok(provocationLexiconProblem("вы идиоты"));
+assert.equal(pollOptionsProblem(["игра", "книга"]), null);
+assert.ok(provocationLexiconProblem("церковь\nдвор"));
+
 assert.equal(lowercaseSentenceStarts("ИИ использовался как инструмент"), "ИИ использовался как инструмент");
 assert.equal(lowercaseSentenceStarts("ии использовался как инструмент"), "ИИ использовался как инструмент");
 assert.equal(rotationSafetyProblem("ИИ использовался как инструмент, и всё", "backstage"), null);
@@ -190,6 +225,45 @@ assert.ok(ruleCheck(quietText, oloid, evening, ask, "oloid-ask"));
 assert.equal(ruleCheck(numbersText, oloid, evening, numbers, "oloid-dev-numbers", undefined, false, voice.text), null);
 assert.ok(ruleCheck(`${numbersText}\n\nещё 1600 реплик`, oloid, evening, numbers, "oloid-dev-numbers", undefined, false, voice.text));
 assert.ok(backstageText.length <= 450 && quietText.length <= 450 && numbersText.length <= 450);
+
+const provocation = oloid.rubrics.find((rubric) => rubric.id === "provocation");
+assert.ok(provocation);
+assert.equal(provocation.weight, 0);
+assert.equal(oloid.thirdDailyRubric, "provocation");
+const provocationFacts = factsFor(oloid, slot1730, "provocation").join("\n");
+assert.equal(provocationFacts.includes("500 ₽"), false);
+const hotText = `визуальные новеллы — это не игры? мы так не думаем.
+
+когда текста больше, чем кликов, спор в комментариях обычно интереснее вердикта.
+
+а вы где ставите границу жанра?`;
+const hotLink = oloid.link(slot1730, "provocation-opinion");
+const hotLinked = `${hotText}\n\n${hotLink}`;
+assert.equal(ruleCheck(hotText, oloid, slot1730, provocation, "provocation-opinion", undefined, true), null);
+assert.ok(ruleCheck(hotText, oloid, slot1730, provocation, "provocation-opinion"));
+assert.equal(ruleCheck(hotLinked, oloid, slot1730, provocation, "provocation-opinion"), null);
+assert.ok(hotLink.includes("utm_content=provocation-opinion"));
+assert.ok(ruleCheck(`${hotText}\n\nэто уже политика`, oloid, slot1730, provocation, "provocation-opinion", undefined, true));
+assert.ok(ruleCheck(`${hotText}\n\nтут замешан бог`, oloid, slot1730, provocation, "provocation-opinion", undefined, true));
+assert.ok(ruleCheck(`${hotText}\n\nвы идиоты`, oloid, slot1730, provocation, "provocation-opinion", undefined, true));
+assert.ok(ruleCheck(`${hotText}\n\nэто хоррор`, oloid, slot1730, provocation, "provocation-opinion", undefined, true));
+assert.ok(ruleCheck(`${hotText}\n\nскачай и поиграй`, oloid, slot1730, provocation, "provocation-opinion", undefined, true));
+assert.ok(ruleCheck(`${hotLinked}\n\nhttps://example.com`, oloid, slot1730, provocation, "provocation-opinion"));
+assert.equal(provocationNumberProblem("сейчас просто спор про жанр", provocationFacts), null);
+assert.equal(provocationNumberProblem("спор про Петербург 2018 года", provocationFacts), null);
+assert.ok(provocationNumberProblem("у нас 839 файлов озвучки", provocationFacts));
+assert.ok(provocationNumberProblem("цена 500 рублей", provocationFacts));
+assert.ok(provocationNumberProblem("прохождение 2–3 часа", provocationFacts));
+assert.ok(repeatedEnding(hotText, [{ project: "oloid", rubric: "provocation", text: hotText, at: slot1730.toISOString() }], "oloid"));
+assert.equal(
+  repeatedEnding(
+    hotText.replace("а вы где ставите границу жанра?", "вам ближе книга или всё-таки игра?"),
+    [{ project: "oloid", rubric: "ask", text: hotText, at: slot1730.toISOString() }],
+    "oloid",
+  ),
+  null,
+);
+assert.ok(hotText.length <= 450 && hotLinked.length <= 450);
 
 console.log("selfcheck ok");
 console.log("--- sample backstage (not model) ---\n" + backstageText);

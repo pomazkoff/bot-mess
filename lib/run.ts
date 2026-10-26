@@ -3,6 +3,7 @@ import { appStoreCodeProblem, appStoreMomentProblem, appStorePriceProblem, detec
 import {
   OLOID_ASK_RUBRIC,
   OLOID_LINE_RUBRIC,
+  countProvocationPosts,
   countRegularPosts,
   eligibleRotationRubrics,
   isOloidRotationRubric,
@@ -12,14 +13,18 @@ import {
   pickCharacterLine,
   pickLeastRecent,
   pollOptionsProblem,
+  provocationHasLink,
+  provocationLexiconProblem,
+  provocationWantsPoll,
   regularPostIsQuiet,
   toneNoteForRubric,
   toPollAttachment,
   usedDateHookIds,
+  OLOID_PROVOCATION_FORMATS,
   type PollAttachment,
   type SlotTone,
 } from "./oloidRotation.js";
-import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, mskCalendarDay, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RUBRIC, OLOID_VKPLAY_RUBRIC, OLOID_VKPLAY_SKIP_REASON, OLOID_VKPLAY_SLOT_HOUR_MSK, PROJECTS, pickWeighted, spentAppStoreCodes, vkPlayUrlBlocked, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
+import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, mskCalendarDay, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_PROVOCATION_SLOT_HOUR_MSK, OLOID_PROVOCATION_SLOT_UNTIL_HOUR_MSK, OLOID_VKPLAY_RUBRIC, OLOID_VKPLAY_SKIP_REASON, OLOID_VKPLAY_SLOT_HOUR_MSK, PROJECTS, pickWeighted, spentAppStoreCodes, vkPlayUrlBlocked, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
 import type { HistoryItem } from "./store.js";
 import type { Channel } from "./channels.js";
 import { pickRegularShown } from "./variety.js";
@@ -47,6 +52,10 @@ export type Draft = {
   regularCount?: number;
   /** Карусель или ролик обычного поста. В Redis пишется только если медиа реально ушло. */
   mediaId?: string;
+  /** Формат провокации. В Redis пишется только после успешной публикации. */
+  provocationFormat?: string;
+  /** Сколько провокаций уже вышло до этой. Чётные — опрос, нечётные — ссылка. */
+  provocationCount?: number;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -97,6 +106,20 @@ export function secondDailyPending(project: Project, doneDate: string | null, no
   return doneDate !== mskDay(now);
 }
 
+/** Провокация берёт час внутри окна [from, until). 20:00 (until) остаётся обычным постом. */
+export function thirdDailyClaimsHour(now: Date, fromHour: number, untilHour: number): boolean {
+  const hour = mskHour(now);
+  return hour >= fromHour && hour < untilHour;
+}
+
+/** Провокация ещё не выходила сегодня и календарный день уже не раньше thirdDailyFrom. */
+export function thirdDailyPending(project: Project, doneDate: string | null, now: Date): boolean {
+  const id = project.thirdDailyRubric;
+  if (!id || !project.rubrics.some((r) => r.id === id)) return false;
+  if (project.thirdDailyFrom && mskDay(now) < project.thirdDailyFrom) return false;
+  return doneDate !== mskDay(now);
+}
+
 /** Рубрика по весам без повтора предыдущей на этом аккаунте.
  *  alternateRubric без alternateEveryDays — через пост.
  *  alternateEveryDays — не чаще раза в N суток: срок считается по всей истории проекта
@@ -106,9 +129,13 @@ export function secondDailyPending(project: Project, doneDate: string | null, no
  *  OLOID_APP_STORE_PROMO_UNTIL и есть неиспользованный код. Иначе слот — обычный appstore.
  *  secondDailyRubric — другой слот суток, не раньше secondDailyHourMsk, и только если dailyRubric за сегодня уже вышел.
  *  До этого часа и пока дневной пост не опубликован поведение прежнее: утро остаётся за App Store.
- *  Трейлер при этом не сбрасывается: его срок смотрит только на посты своей рубрики и сработает на следующем запуске.
+ *  thirdDailyRubric — слот внутри [thirdDailyHourMsk, thirdDailyUntilHourMsk). У «Олоида» это провокация
+ *  в 17:30 МСК. Магазины важнее: пока App Store или VK Play за сутки не закрыты, слот берёт их.
+ *  20:00 провокацию не догоняет. Трейлер при этом не сбрасывается: его срок смотрит только на посты своей рубрики
+ *  и сработает на следующем свободном запуске.
  *  У «Олоида» обычный пост — не веса, а очередь LRU (rotation.lastUsed). preferRegular: календарный повод
- *  забирает слот у трейлера, магазины не трогает. */
+ *  забирает слот у трейлера, магазины и провокацию не трогает.
+ *  provocationDoneDate — МСК-дата уже опубликованной провокации. */
 export function pickRubric(
   project: Project,
   history: HistoryItem[],
@@ -119,6 +146,7 @@ export function pickRubric(
   appStorePromo = false,
   secondDailyDoneDate: string | null = null,
   rotation?: { lastUsed?: Record<string, string>; preferRegular?: boolean },
+  provocationDoneDate: string | null = null,
 ): Rubric {
   const forced = project.rubrics.find((r) => r.id === forcedRubric);
   if (forced) return forced;
@@ -127,7 +155,8 @@ export function pickRubric(
   const daily = project.rubrics.find((r) => r.id === project.dailyRubric);
   const promo = project.rubrics.find((r) => r.id === OLOID_APP_STORE_PROMO_RUBRIC);
   const second = project.rubrics.find((r) => r.id === project.secondDailyRubric);
-  const weighted = () => pickWeighted(project.rubrics.filter((r) => r !== alt && r !== daily && r !== promo && r !== second && r.weight > 0), lastRubric, (r) => r.id);
+  const third = project.rubrics.find((r) => r.id === project.thirdDailyRubric);
+  const weighted = () => pickWeighted(project.rubrics.filter((r) => r !== alt && r !== daily && r !== promo && r !== second && r !== third && r.weight > 0), lastRubric, (r) => r.id);
   const regular = () => {
     if (project.id !== "oloid") return weighted();
     const pool = eligibleRotationRubrics(project);
@@ -150,6 +179,15 @@ export function pickRubric(
     // Утренний пост не вышел: слот по-прежнему его, VK Play ждёт следующего запуска.
     if (appStorePromo && promo) return promo;
     return daily;
+  }
+  // Провокация — только своё окно и только когда магазины за сутки уже закрыты.
+  const thirdPending = !!(third && thirdDailyPending(project, provocationDoneDate, now));
+  if (
+    third &&
+    thirdPending &&
+    thirdDailyClaimsHour(now, project.thirdDailyHourMsk ?? OLOID_PROVOCATION_SLOT_HOUR_MSK, project.thirdDailyUntilHourMsk ?? OLOID_PROVOCATION_SLOT_UNTIL_HOUR_MSK)
+  ) {
+    return third;
   }
   // Календарный повод занимает один обычный пост и не сбрасывает срок трейлера.
   if (rotation?.preferRegular) return regular();
@@ -280,6 +318,12 @@ export async function makeDraft(opts: {
   dailyDoneDate?: string | null;
   /** МСК-дата последнего закрытого поста secondDailyRubric. null — такого поста ещё не было. */
   secondDailyDoneDate?: string | null;
+  /** МСК-дата последней успешной провокации. null — сегодня ещё не выходила. */
+  provocationDoneDate?: string | null;
+  /** Сколько провокаций уже опубликовано. null — считаем по истории. */
+  provocationCount?: number | null;
+  /** Очередь форматов провокации: id → ISO-время. */
+  provocationFormats?: Record<string, string>;
   /** Уже выданные коды App Store. null — Redis недоступен, код не показываем. */
   usedAppStoreCodes?: string[] | null;
   /** Очередь обычных рубрик «Олоида». null у счётчика — считаем по истории. */
@@ -301,6 +345,9 @@ export async function makeDraft(opts: {
     now,
     dailyDoneDate = null,
     secondDailyDoneDate = null,
+    provocationDoneDate = null,
+    provocationCount: storedProvocationCount = null,
+    provocationFormats = {},
     usedAppStoreCodes = null,
     rubricUsed = {},
     devFactUsed = {},
@@ -331,14 +378,31 @@ export async function makeDraft(opts: {
   const rubric = pickRubric(project, own, now, forcedRubric, history, dailyDoneDate, promoScheduled && nextCode != null, secondDailyDoneDate, {
     lastUsed: rubricLastUsed,
     preferRegular: dateHookDue != null,
-  });
+  }, provocationDoneDate);
   const wanted = forcedTopic?.toLowerCase();
   let topic = (wanted && rubric.topics?.find((t) => t.toLowerCase().includes(wanted))) || pickTopic(rubric, history);
-  const linkContent = `${channel.id}-${rubric.id}`;
+  let linkContent = `${channel.id}-${rubric.id}`;
   const topicTag = pickTopicTag(project, rubric, history);
   const regularCount = storedRegularCount ?? countRegularPosts(projectHistory);
   const rotation = project.id === "oloid" && isOloidRotationRubric(rubric.id);
-  const quiet = rotation && regularPostIsQuiet(regularCount);
+  const provocation = rubric.id === OLOID_PROVOCATION_RUBRIC;
+  const provocationCount = storedProvocationCount ?? countProvocationPosts(projectHistory);
+  const provocationFormat = provocation
+    ? pickLeastRecent(
+        OLOID_PROVOCATION_FORMATS,
+        mergeLastUsed(
+          provocationFormats,
+          projectHistory.map((item) => ({ id: item.provocationFormat, at: item.at })),
+        ),
+      )
+    : undefined;
+  if (provocationFormat) {
+    topic = provocationFormat.label;
+    // utm_content=provocation-<формат>, не общий шаблон аккаунт-рубрика.
+    linkContent = `provocation-${provocationFormat.id}`;
+  }
+  const withProvocationLink = provocation && provocationHasLink(provocationCount);
+  const quiet = (rotation && regularPostIsQuiet(regularCount)) || (provocation && !withProvocationLink);
   const tone = project.id === "oloid" ? oloidSlotTone(mskHour(now)) : undefined;
   const dateHook = rotation ? dateHookDue : null;
 
@@ -368,7 +432,7 @@ export async function makeDraft(opts: {
   // Трейлер, магазины и цифры сюда не попадают: у трейлера своё видео и свой срок.
   const askFromHistory = projectHistory.find((item) => item.rubric === OLOID_ASK_RUBRIC);
   const askWasPoll = lastAskWasPoll ?? (askFromHistory ? askFromHistory.poll === true : null);
-  const wantPoll = rubric.id === OLOID_ASK_RUBRIC && askWasPoll !== true;
+  const wantPoll = provocation ? provocationWantsPoll(provocationCount) : rubric.id === OLOID_ASK_RUBRIC && askWasPoll !== true;
   const shown =
     rotation && !wantPoll && !rubric.media
       ? pickRegularShown(
@@ -397,6 +461,8 @@ export async function makeDraft(opts: {
     tone,
     regularCount,
     mediaId: shown?.id,
+    provocationFormat: provocationFormat?.id,
+    provocationCount,
   };
 
   if (rubric.id === OLOID_APP_STORE_PROMO_RUBRIC && !promoCode) {
@@ -414,6 +480,8 @@ export async function makeDraft(opts: {
     wantPoll,
     characterLine: line ? `${line.speaker}: «${line.line}». ${line.note}` : undefined,
     shownNote: shown?.note,
+    provocation,
+    formatNote: provocationFormat?.steer,
   };
 
   for (let i = 0; i < MAX_ATTEMPTS; i++) {
@@ -434,7 +502,8 @@ export async function makeDraft(opts: {
       rejected.push(`${problem}: ${candidate}`);
       continue;
     }
-    const pollErr = wantPoll ? pollOptionsProblem(drafted.options) : null;
+    const pollLexicon = wantPoll && provocation && drafted.options ? provocationLexiconProblem(drafted.options.join("\n")) : null;
+    const pollErr = wantPoll ? pollLexicon ?? pollOptionsProblem(drafted.options) : null;
     if (pollErr && i < MAX_ATTEMPTS - 1) {
       feedback = pollErr;
       rejected.push(`${pollErr}: ${candidate}`);

@@ -1,9 +1,9 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { appStorePromoOpen, makeDraft, mskDay } from "../lib/run.js";
-import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC, OLOID_VKPLAY_RUBRIC } from "../lib/projects.js";
+import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_VKPLAY_RUBRIC } from "../lib/projects.js";
 import { postAlreadyPublished, publishPost } from "../lib/threads.js";
 import { OLOID_ASK_RUBRIC, isOloidRotationRubric } from "../lib/oloidRotation.js";
-import { getAppStoreCodesUsed, getAppStoreDay, getHistory, getLastProject, getOloidRotationState, getVkPlayDay, markAppStoreCodeUsed, pushHistory, saveOloidRotation, setAppStoreDay, setLastProject, setVkPlayDay } from "../lib/store.js";
+import { getAppStoreCodesUsed, getAppStoreDay, getHistory, getLastProject, getOloidRotationState, getProvocationDay, getProvocationState, getVkPlayDay, markAppStoreCodeUsed, pushHistory, saveOloidRotation, saveProvocation, setAppStoreDay, setLastProject, setProvocationDay, setVkPlayDay } from "../lib/store.js";
 import { notify } from "../lib/notify.js";
 import { channelById } from "../lib/channels.js";
 import { publishDueScheduled } from "../lib/scheduled.js";
@@ -92,6 +92,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // null — App Store-поста ещё не было. Дата пишется ниже, только после успешной публикации.
     const dailyDoneDate = channel.projects.includes("oloid") ? await getAppStoreDay("oloid") : null;
     const secondDailyDoneDate = channel.projects.includes("oloid") ? await getVkPlayDay("oloid") : null;
+    const provocationDoneDate = channel.projects.includes("oloid") ? await getProvocationDay("oloid") : null;
+    const provocation = channel.projects.includes("oloid") ? await getProvocationState("oloid") : null;
     const usedAppStoreCodes = channel.projects.includes("oloid") ? await getAppStoreCodesUsed("oloid", OLOID_APP_STORE_CODES) : [];
     const rotation = channel.projects.includes("oloid") ? await getOloidRotationState("oloid") : null;
     const draft = await makeDraft({
@@ -102,6 +104,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       now,
       dailyDoneDate,
       secondDailyDoneDate,
+      provocationDoneDate,
+      provocationCount: provocation?.count,
+      provocationFormats: provocation?.formats,
       usedAppStoreCodes,
       rubricUsed: rotation?.rubricUsed,
       devFactUsed: rotation?.devFactUsed,
@@ -111,7 +116,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       lastAskWasPoll: rotation?.lastAskWasPoll,
       mediaUsed: rotation?.mediaUsed,
     });
-    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, lineId, tone, regularCount, mediaId } = draft;
+    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, lineId, tone, regularCount, mediaId, provocationFormat, provocationCount } = draft;
     const where = `${channel.name} · ${project.name}`;
 
     // Ссылка VK Play ещё заглушка: пост не генерируем и не публикуем. День закрываем, чтобы следующий слот суток не пропускался тоже.
@@ -177,6 +182,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const appStoreSlot = rubricId === OLOID_APP_STORE_RUBRIC || rubricId === OLOID_APP_STORE_PROMO_RUBRIC;
     if (project.dailyRubric && appStoreSlot) await setAppStoreDay(project.id, mskDay(now));
     if (rubricId === OLOID_VKPLAY_RUBRIC) await setVkPlayDay(project.id, mskDay(now));
+    if (rubricId === OLOID_PROVOCATION_RUBRIC && provocationFormat) {
+      await setProvocationDay(project.id, mskDay(now));
+      await saveProvocation(project.id, { formatId: provocationFormat, at: now.toISOString(), count: (provocationCount ?? 0) + 1 });
+    }
     if (promoCode) await markAppStoreCodeUsed(project.id, promoCode);
     const pollOptions = poll && !pollDropped ? [poll.option_a, poll.option_b, poll.option_c, poll.option_d].filter((option): option is string => Boolean(option)) : undefined;
     if (isOloidRotationRubric(rubricId)) {
@@ -209,6 +218,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       devFactId,
       lineId,
       mediaId: used ? mediaId : undefined,
+      provocationFormat,
     });
     await setLastProject(channel, project.id);
     const promoLine = promoCode != null ? `\nПромокод: ${promoCode}. Осталось: ${promoLeft ?? 0}` : "";
@@ -218,11 +228,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       pollDropped ? "опрос не принят, вышел текст" : "",
       dateHook ? `повод ${dateHook}` : "",
       devFactId ? `факт ${devFactId}` : "",
+      provocationFormat ? `формат ${provocationFormat}` : "",
       tone === "morning" ? "утро" : tone === "evening" ? "вечер" : tone === "day" ? "день" : "",
     ].filter(Boolean);
     const mediaNote = !used ? "" : used.type === "CAROUSEL" ? ", с каруселью" : used.type === "VIDEO" ? ", с видео" : ", с картинкой";
     await notify(`✅ Опубликовано (${where}, ${rubricId}${mediaNote}${marks.length ? `, ${marks.join(", ")}` : ""}):${topic ? `\nТема: ${topic}` : ""}${topicTag ? `\nТема Threads: ${topicTag}` : ""}${promoLine}\n\n${text}`);
-    return res.json({ posted: true, channel: channel.id, project: project.id, rubric: rubricId, topic, media: used?.type === "CAROUSEL" ? used.urls : used?.url, mediaId: used ? mediaId : undefined, promoCode, promoLeft, quiet, poll: pollOptions, pollDropped, dateHook, devFactId, tone, postId, text });
+    return res.json({ posted: true, channel: channel.id, project: project.id, rubric: rubricId, topic, media: used?.type === "CAROUSEL" ? used.urls : used?.url, mediaId: used ? mediaId : undefined, promoCode, promoLeft, quiet, poll: pollOptions, pollDropped, dateHook, devFactId, provocationFormat, tone, postId, text });
   } catch (e: any) {
     console.error(e);
     await notify(`❌ Threads-бот упал (${channel.name}): ${e?.message ?? e}`);

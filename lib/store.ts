@@ -44,6 +44,7 @@ export type HistoryItem = {
   devFactId?: string; // id факта рубрики «цифры разработки»
   lineId?: string; // id реплики рубрики «реплика дня»
   mediaId?: string; // id карусели или ролика обычного поста
+  provocationFormat?: string; // id формата рубрики provocation
 };
 
 const K = {
@@ -114,6 +115,45 @@ export async function getVkPlayDay(projectId: string): Promise<string | null> {
 
 export async function setVkPlayDay(projectId: string, mskDate: string) {
   await (await db()).set(vkPlayDayKey(projectId), mskDate);
+}
+
+// МСК-дата последней успешной провокации. Неудачная генерация сюда не пишет: 20:00 слот не догоняет.
+const provocationDayKey = (projectId: string) => `threads:provocation_day:${projectId}`;
+const provocationCountKey = (projectId: string) => `threads:provocation_count:${projectId}`;
+const provocationFormatKey = (projectId: string) => `threads:provocation_format:${projectId}`;
+
+export async function getProvocationDay(projectId: string): Promise<string | null> {
+  return (await db()).get(provocationDayKey(projectId));
+}
+
+export async function setProvocationDay(projectId: string, mskDate: string) {
+  await (await db()).set(provocationDayKey(projectId), mskDate);
+}
+
+export type ProvocationState = {
+  /** null — счётчика ещё нет, вызывающий считает по истории. */
+  count: number | null;
+  /** id формата → ISO-время последней публикации. */
+  formats: Record<string, string>;
+};
+
+export async function getProvocationState(projectId: string): Promise<ProvocationState> {
+  const c = await db();
+  const [countRaw, formats] = await Promise.all([c.get(provocationCountKey(projectId)), c.hGetAll(provocationFormatKey(projectId))]);
+  const count = countRaw == null || countRaw === "" ? null : Number(countRaw);
+  return { count: count != null && Number.isFinite(count) ? count : null, formats };
+}
+
+/** Пишется только после успешной публикации. Счётчик задаёт следующий опрос и следующую ссылку. */
+export async function saveProvocation(
+  projectId: string,
+  patch: { formatId: string; at: string; count: number },
+): Promise<void> {
+  const c = await db();
+  await Promise.all([
+    c.hSet(provocationFormatKey(projectId), patch.formatId, patch.at),
+    c.set(provocationCountKey(projectId), String(patch.count)),
+  ]);
 }
 
 // Отдельный ключ на код: SET NX, поэтому повторно отметить опубликованный код нельзя.
