@@ -94,8 +94,8 @@ const ASSETS: readonly Asset[] = [
       "carousels/04_vybory_minigry/04_07_table_minigame_ch5.jpg",
     ],
     fits: [
-      { rubric: "backstage", needles: ["гвозд", "протяж", "клик"] },
-      { rubric: "detail", needles: ["фанер", "стол", "гвозд"] },
+      { rubric: "backstage", needles: ["протяж", "клик", "мини-игр"] },
+      { rubric: "detail", needles: ["фанер", "стол"] },
     ],
     about:
       "Два кадра мини-игр: руки тянут лист фанеры; руки тащат стол по полу. Движение руки, не клик. Не писать про стену, обои, что за ними, лом и выборы.",

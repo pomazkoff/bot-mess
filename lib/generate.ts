@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { OLOID_DEV_NUMBERS_RUBRIC, devNumberProblem, numberTokens } from "./devFacts.js";
+import { oloidColorSteer, oloidPromptFacts, recentDetailNote, spatulaProblem } from "./oloidFacts.js";
 import { isOloidRotationRubric, provocationProblem, quietProblem, rotationSafetyProblem } from "./oloidRotation.js";
 import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, factsFor, forbiddenFor, mentionsPrice, mskCalendarDay, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_VKPLAY_FROM, OLOID_VKPLAY_RUBRIC, oloidRedeemUrl, promoActive, redactAppStoreCodes, type DetectiveRef, type Project, type Rubric } from "./projects.js";
 import type { HistoryItem } from "./store.js";
@@ -68,13 +69,15 @@ export async function draftPost(
   const provocation = hints?.provocation === true;
   const jsonShape = wantPoll ? '{"text": "текст поста", "options": ["вариант", "вариант"]}' : '{"text": "текст поста"}';
 
+  const passport = factsFor(p, now, rubric.id);
+  const factPack = p.id === "oloid" ? oloidPromptFacts(passport, history, now, { rubricId: rubric.id }) : null;
   const system = `Ты пишешь посты для Threads от лица автора проекта «${p.name}». Пишешь по-русски.
 
 ГОЛОС:
 ${p.voice}
 ${voiceNote ? `\nАККАУНТ:\n${voiceNote}\n` : ""}
 ФАКТЫ (единственный допустимый источник утверждений о проекте):
-${factsFor(p, now, rubric.id).map((f) => `• ${f}`).join("\n")}
+${(factPack?.facts ?? passport).map((f) => `• ${f}`).join("\n")}
 
 ЗАПРЕЩЕНО:
 ${forbiddenFor(p, rubric.id, now).map((f) => `• ${f}`).join("\n")}
@@ -98,15 +101,16 @@ ${jsonShape}`;
 
   const user = `Рубрика: ${rubric.brief}
 ${topic ? `Тема поста: ${topic}` : ""}
+${factPack ? oloidColorSteer(factPack.color, rubric.id) : ""}${factPack ? recentDetailNote(history) : ""}
 ${hints?.formatNote ? `Формат этого поста: ${hints.formatNote}` : ""}
 ${hints?.toneNote ? `Тон слота: ${hints.toneNote}` : ""}
 ${hints?.dateSteer ? `Повод дня (одна обычная публикация, без новых фактов): ${hints.dateSteer}` : ""}
 ${hints?.devFact ? `ЕДИНСТВЕННЫЙ числовой факт этого поста. Другие числа из фактов проекта не копируй:\n• ${hints.devFact}` : ""}
 ${hints?.characterLine ? `Единственная допустимая реплика, дословно и в кавычках: ${hints.characterLine}` : ""}
-${hints?.shownNote ? hints.shownNote : pictureNote ? `К посту будет приложена картинка из игры: ${pictureNote}. Можно опереться на одну её деталь; не описывай картинку целиком, не пиши «на картинке» и не добавляй того, чего на ней нет.` : ""}
+${hints?.shownNote ? `${hints.shownNote} Если в кадре есть деталь из списка недавних — не называй её, опиши другую видимую.` : pictureNote ? `К посту будет приложена картинка из игры: ${pictureNote}. Можно опереться на одну её деталь, если её нет в списке недавних деталей. Не описывай картинку целиком, не пиши «на картинке» и не добавляй того, чего на ней нет.` : ""}
 ${wantPoll ? (provocation
-  ? "К посту будет опрос Threads: 2–4 варианта, каждый от 1 до 25 символов, без цифр, ссылок, цены, политики, религии и оскорблений. Варианты — короткие стороны спора, не факты об игре. В тексте задай вопрос и не перечисляй варианты списком."
-  : "К посту будет опрос Threads: 2–4 варианта, каждый от 1 до 25 символов, без цифр, ссылок, цены и спойлеров. Варианты — короткие ответы читателя, не факты об игре. В тексте задай вопрос и не перечисляй варианты списком.") : ""}
+  ? "К посту будет опрос Threads: 2–4 варианта, каждый от 1 до 25 символов и не длиннее 25 байт UTF-8 (кириллица — два байта, держи вариант короче 13 букв), без цифр, ссылок, цены, политики, религии и оскорблений. Варианты — короткие стороны спора, не факты об игре. В тексте задай вопрос и не перечисляй варианты списком."
+  : "К посту будет опрос Threads: 2–4 варианта, каждый от 1 до 25 символов и не длиннее 25 байт UTF-8 (кириллица — два байта, держи вариант короче 13 букв), без цифр, ссылок, цены и спойлеров. Варианты — короткие ответы читателя, не факты об игре. В тексте задай вопрос и не перечисляй варианты списком.") : ""}
 ${linkLine}
 ${code ? `Единственный код этого поста — вставь отдельной строкой ровно так, без изменений: ${code}\nЭто одноразовая бесплатная загрузка в App Store: код вводят там же, забирает первый. Других кодов нет и выдумывать их нельзя. Код оставь и в тексте отдельной строкой, без ссылки вокруг: его копируют вручную. Коротко скажи, что нажатие на ссылку само подставит код в App Store. Призыв в конце своими словами: скачать, поиграть и оставить отзыв. Фразу «скачай — поиграй — оставь отзыв» не копируй. Цену не упоминать.` : ""}
 ${season ? `Сезонный повод (по желанию): ${season}` : ""}
@@ -228,6 +232,10 @@ export function ruleCheck(
   devFact?: string,
 ): string | null {
   if (!text) return "пустой текст";
+  if (p.id === "oloid") {
+    const tool = spatulaProblem(text);
+    if (tool) return tool;
+  }
   if (text.length > MAX_LEN) return `длина ${text.length} > ${MAX_LEN}`;
   if ((text.match(EMOJI) || []).length > 1) return "больше одного эмодзи";
   for (const re of BANNED) if (re.test(text)) return `запрещённый паттерн ${re}`;

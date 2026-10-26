@@ -23,6 +23,16 @@ import {
 import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_FROM, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RETIRED_CODES, PROJECTS, factsFor, nextAppStoreCode, oloidRedeemUrl, redactAppStoreCodes, spentAppStoreCodes } from "./projects.js";
 import { appStorePromoOpen, pickPicture, pickRubric } from "./run.js";
 import type { HistoryItem } from "./store.js";
+import {
+  OLOID_COLOR_FACTS_PER_POST,
+  OLOID_ROTATING_FACTS,
+  oloidPromptFacts,
+  oloidRepeatProblem,
+  repeatedDetailProblem,
+  spatulaProblem,
+  topicRepeatsRecent,
+} from "./oloidFacts.js";
+import { briefThreadsError, containerSteps, pollAttachmentField } from "./threads.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pickRegularShown, shownAssetFiles } from "./variety.js";
@@ -89,10 +99,13 @@ assert.equal(OLOID_DATE_HOOKS.length, 4);
 
 assert.equal(pollOptionsProblem(["двор", "кухня"]), null);
 assert.equal(pollOptionsProblem(["а", "б"]), null);
+assert.equal(pollOptionsProblem(["игра", "б".repeat(12)]), null);
 assert.ok(pollOptionsProblem(["только один"]));
 assert.ok(pollOptionsProblem(["двор", "а".repeat(26)]));
+assert.ok(pollOptionsProblem(["двор", "б".repeat(13)]));
 assert.ok(pollOptionsProblem(["двор", "2018"]));
 assert.ok(pollOptionsProblem(["хоррор", "мистика"]));
+assert.ok(pollOptionsProblem(["шпатель", "рука"]));
 
 const voice = OLOID_DEV_NUMBER_FACTS.find((fact) => fact.id === "voice-839");
 assert.ok(voice);
@@ -184,7 +197,7 @@ assert.equal(pickRegularShown("ask", "Как вам ближе такая ист
 const yard = pickRegularShown("petersburg", "Двор-колодец доходного дома", {});
 assert.ok(yard && (yard.id === "01_piter_mesta" || yard.id === "video-02-lokacii"));
 assert.equal(pickRegularShown("petersburg", "Конюшенная и фан-зона 2018 года", {})?.id, "05_atmosfera_2018");
-assert.equal(pickRegularShown("backstage", "Почему гвозди вытаскиваются протяжкой, а не кликом", {})?.id, "04_vybory_minigry");
+assert.equal(pickRegularShown("backstage", "Почему мини-игра протяжкой, а не кликом", {})?.id, "04_vybory_minigry");
 assert.equal(pickRegularShown("backstage", "Звук: половина работы и музыкант", {})?.id, "video-06-den");
 assert.equal(
   pickRegularShown("petersburg", "Двор-колодец доходного дома", { "01_piter_mesta": "2026-10-02T00:00:00.000Z", "video-02-lokacii": "2026-10-01T00:00:00.000Z" })?.id,
@@ -342,6 +355,104 @@ const dayIdx = cronSrc.indexOf("if (project.dailyRubric && appStoreSlot) await s
 assert.ok(dryIdx > 0 && publishIdx > dryIdx && dayIdx > publishIdx && markIdx > dayIdx);
 assert.equal(cronSrc.slice(0, publishIdx).includes("await markAppStoreCodeUsed"), false);
 assert.match(cronSrc, /const appStoreSlot = rubricId === OLOID_APP_STORE_RUBRIC \|\| rubricId === OLOID_APP_STORE_PROMO_RUBRIC/);
+assert.ok(cronSrc.includes("pollError"));
+
+const factBlob = oloid.facts.join("\n");
+assert.equal(/шпател/iu.test(factBlob), false);
+assert.equal(/гвозд/iu.test(factBlob), false);
+assert.equal(/шпател|гвозд/iu.test(OLOID_DEV_NUMBER_FACTS.map((fact) => `${fact.label}\n${fact.text}`).join("\n")), false);
+assert.equal(
+  /шпател|гвозд/iu.test(oloid.rubrics.map((rubric) => `${rubric.brief}\n${(rubric.topics ?? []).join("\n")}`).join("\n")),
+  false,
+);
+assert.equal(spatulaProblem("вытаскиваешь гвозди шпателем"), "шпатель не упоминать");
+assert.equal(spatulaProblem("движение руки, не клик"), null);
+assert.equal(ruleCheck("тут шпатель.", oloid, evening, backstage, "oloid-backstage"), "шпатель не упоминать");
+
+const passport = factsFor(oloid, slot1730, "backstage");
+for (const spec of OLOID_ROTATING_FACTS) {
+  assert.equal(passport.filter((fact) => fact.includes(spec.needle)).length, 1, spec.id);
+}
+for (const fact of passport) {
+  assert.ok(OLOID_ROTATING_FACTS.filter((spec) => fact.includes(spec.needle)).length <= 1, fact.slice(0, 48));
+}
+const rotatingInOrder = passport.filter((fact) => OLOID_ROTATING_FACTS.some((spec) => fact.includes(spec.needle)));
+const freshPack = oloidPromptFacts(passport, [], slot1730, { rubricId: "backstage" });
+assert.deepEqual(freshPack.color, rotatingInOrder.slice(0, OLOID_COLOR_FACTS_PER_POST));
+assert.ok(freshPack.facts.some((fact) => fact.includes("Санкт-Петербурге")));
+for (const fact of freshPack.color) assert.ok(freshPack.facts.includes(fact));
+
+const cooledTable: HistoryItem = {
+  project: "oloid",
+  rubric: "detail",
+  text: "мини-игра: стол рывками",
+  at: new Date(slot1730.getTime() - 24 * 60 * 60 * 1000).toISOString(),
+};
+const cooledPack = oloidPromptFacts(passport, [cooledTable], slot1730, { rubricId: "appstore" });
+assert.equal(cooledPack.color.some((fact) => fact.includes("стол рывками")), false);
+assert.deepEqual(cooledPack.color, [...rotatingInOrder.slice(1, OLOID_COLOR_FACTS_PER_POST), rotatingInOrder[OLOID_COLOR_FACTS_PER_POST]]);
+
+const musicianFact = passport.find((fact) => fact.includes("профессиональный музыкант"));
+const cityFact = passport.find((fact) => fact.includes("Санкт-Петербурге"));
+assert.ok(musicianFact && cityFact);
+const exactly = new Date(slot1730.getTime() - 3 * 24 * 60 * 60 * 1000).toISOString();
+const inside = new Date(slot1730.getTime() - 3 * 24 * 60 * 60 * 1000 + 60 * 1000).toISOString();
+const dueMusician = oloidPromptFacts([cityFact, musicianFact], [{ project: "oloid", rubric: "backstage", text: "музыкант", at: exactly }], slot1730, {
+  rubricId: "backstage",
+});
+const earlyMusician = oloidPromptFacts([cityFact, musicianFact], [{ project: "oloid", rubric: "backstage", text: "музыкант", at: inside }], slot1730, {
+  rubricId: "vkplay",
+});
+assert.ok(dueMusician.color.some((fact) => fact.includes("музыкант")));
+assert.equal(earlyMusician.color.some((fact) => fact.includes("музыкант")), false);
+const playtimeFact = passport.find((fact) => fact.includes("2–3 часов"));
+assert.ok(playtimeFact);
+assert.deepEqual(oloidPromptFacts([cityFact, playtimeFact], [], slot1730, { rubricId: "provocation" }).color, []);
+assert.ok(oloidPromptFacts([cityFact, playtimeFact], [], slot1730, { rubricId: "vkplay" }).color.some((fact) => fact.includes("2–3 часов")));
+assert.ok(oloidRepeatProblem("снова музыкант", [{ project: "oloid", rubric: "backstage", text: "музыкант играл", at: inside }], slot1730));
+assert.equal(oloidRepeatProblem("снова музыкант", [{ project: "oloid", rubric: "backstage", text: "музыкант играл", at: exactly }], slot1730), null);
+
+for (const rubricId of ["appstore", "vkplay", "provocation"] as const) {
+  const pack = oloidPromptFacts(factsFor(oloid, slot1730, rubricId), [], slot1730, { rubricId });
+  assert.equal(pack.color.length, OLOID_COLOR_FACTS_PER_POST, rubricId);
+  assert.equal(pack.facts.some((fact) => fact.includes("500")), false, rubricId);
+}
+const numberPack = oloidPromptFacts(factsFor(oloid, slot1730, "dev-numbers"), [], slot1730, { rubricId: "dev-numbers" });
+assert.deepEqual(numberPack.color, []);
+assert.equal(numberPack.facts.some((fact) => fact.includes("1600 реплик")), false);
+assert.ok(numberPack.facts.some((fact) => fact.includes("Санкт-Петербурге")));
+
+const fillers: HistoryItem[] = Array.from({ length: 10 }, (_, i) => ({
+  project: "oloid",
+  rubric: "ask",
+  text: "тишина на лестнице",
+  at: new Date(slot1730.getTime() - i * 60 * 60 * 1000).toISOString(),
+}));
+const oldCloth: HistoryItem = { project: "oloid", rubric: "detail", text: "на кухне клеёнка", at: "2026-09-01T12:00:00.000Z" };
+assert.equal(repeatedDetailProblem("опять клеёнка", [...fillers, oldCloth]), null);
+assert.ok(repeatedDetailProblem("клеёнка никуда не делась", [oldCloth, ...fillers.slice(0, 9)]));
+assert.equal(oloidRepeatProblem("просто мистическая новелла", fillers, slot1730), null);
+assert.ok(topicRepeatsRecent("Фанера, которую тянут рукой", [{ project: "oloid", rubric: "detail", text: "лист фанеры", at: cooledTable.at }], slot1730));
+assert.equal(topicRepeatsRecent("Звук: половина работы и музыкант", fillers, slot1730), false);
+
+const steps = containerSteps("Геймдев", pollAttachmentField({ option_a: "игра", option_b: "книга" }));
+assert.equal(steps.length, 4);
+assert.equal(typeof steps[0].extra.poll_attachment, "string");
+assert.equal(steps[0].extra.topic_tag, "Геймдев");
+assert.equal(steps[0].dropsPoll, false);
+assert.equal("topic_tag" in steps[1].extra, false);
+assert.equal("poll_attachment" in steps[1].extra, true);
+assert.equal(steps[1].dropsPoll, false);
+assert.equal(steps[2].dropsPoll, true);
+assert.equal(steps[2].extra.topic_tag, "Геймдев");
+assert.equal("poll_attachment" in steps[2].extra, false);
+assert.deepEqual(steps[3].extra, {});
+assert.equal(steps[3].dropsPoll, true);
+assert.deepEqual(JSON.parse(pollAttachmentField({ option_a: "игра", option_b: "книга" })), { option_a: "игра", option_b: "книга" });
+const fourOptions = JSON.parse(pollAttachmentField({ option_a: "а", option_b: "б", option_c: "в", option_d: "г" })) as Record<string, string>;
+assert.deepEqual(Object.keys(fourOptions), ["option_a", "option_b", "option_c", "option_d"]);
+assert.equal(briefThreadsError(new Error("Threads /me/threads: Param poll_attachment must be a valid JSON (#100/33)")).includes("poll_attachment"), true);
+assert.equal(briefThreadsError(new Error("x".repeat(400))).length, 220);
 
 console.log("selfcheck ok");
 console.log("--- sample backstage (not model) ---\n" + backstageText);
