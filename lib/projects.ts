@@ -47,6 +47,10 @@ export type Project = {
   secondDailyRubric?: string; // второй пост за сутки МСК, в более позднем слоте, чем dailyRubric. Убрать поле — выключить
   secondDailyFrom?: string; // с этого календарного дня МСК включительно; без поля — сразу
   secondDailyHourMsk?: number; // не раньше этого часа МСК: утренний слот остаётся у dailyRubric
+  thirdDailyRubric?: string; // слот между вторым дневным и вечерним обычным. Убрать поле — выключить
+  thirdDailyFrom?: string; // с этого календарного дня МСК включительно; без поля — сразу
+  thirdDailyHourMsk?: number; // не раньше этого часа МСК
+  thirdDailyUntilHourMsk?: number; // раньше этого часа МСК: вечерний слот рубрику не забирает
   promo?: Promo; // промокод: попадает в факты, пока действует, и только в разрешённые рубрики
   pictures?: Picture[]; // одобренные Ильёй кадры (public/media/), без спойлеров. Рубрики appstore и vkplay их не берут
   appStorePictures?: Picture[]; // промо-баннеры только для appstore и appstore-promo; в остальные рубрики не попадают
@@ -82,6 +86,15 @@ export const OLOID_VKPLAY_RUBRIC = "vkplay";
 export const OLOID_VKPLAY_FROM = "2026-10-23";
 /** Час МСК слота VK Play (крон `0 12 * * *` UTC = 15:00 МСК). Утро 10:00 остаётся за App Store. */
 export const OLOID_VKPLAY_SLOT_HOUR_MSK = 15;
+/** Провокационный пост @oloid.vn. Не магазин и не обычная очередь. */
+export const OLOID_PROVOCATION_RUBRIC = "provocation";
+/**
+ * С этого часа МСК слот провокации может забрать запуск.
+ * Крон `30 14 * * *` UTC = 17:30 МСК (20:30 по Омску).
+ */
+export const OLOID_PROVOCATION_SLOT_HOUR_MSK = 17;
+/** До этого часа МСК, не включая его. 20:00 остаётся обычным постом или трейлером. */
+export const OLOID_PROVOCATION_SLOT_UNTIL_HOUR_MSK = 20;
 export const OLOID_VKPLAY_SOON_FACT = "VK Play — скоро, даты выхода нет.";
 export const OLOID_VKPLAY_OUT_FACT = "«Олоид» вышел на VK Play.";
 export const OLOID_VKPLAY_SKIP_REASON =
@@ -636,6 +649,25 @@ export const PROJECTS: Project[] = [
           "Пост о вышедшем трейлере «Олоида». Начни с короткой новости от команды и каждый раз говори её другими словами: «мы выкатили тизер», «тизер «Олоида» вышел», «мы наконец показали тизер». Сразу после — одна-две короткие атмосферные фразы одним абзацем. Последняя строка перед ссылкой — короткое приглашение или вопрос, каждый раз новыми словами и в тему этого поста: спроси, что думают о тизере, позови его посмотреть или спроси, заходит ли такая атмосфера. Не копируй образец и не повторяй концовки недавних постов. Видео будет прямо в посте, поэтому не пиши «прикреплено к посту» и «смотрите ниже». Не описывай, что показано в трейлере, и не называй его длительность — этого нет в фактах. Не повторяй недавние посты о трейлере.",
         media: { type: "VIDEO", url: "https://threads-autopost-six.vercel.app/media/oloid-teaser-v3-9x16.mp4" },
       },
+      // Четвёртый пост суток: 17:30 МСК, между VK Play и обычной рубрикой. weight 0 — в очередь обычных не входит.
+      // Медиа нет: опрос только у текста, трейлер и карусели обычных постов не берём.
+      // Остановить: удалить thirdDailyRubric.
+      {
+        id: "provocation",
+        weight: 0,
+        brief: [
+          "Провокационный пост, чтобы собрать комментарии. Это спор, не реклама и не новость о магазине.",
+          "Голос тот же: строчные буквы, абзацы через пустую строку, разговорно, с юмором, от команды («мы»), без «я».",
+          "Первая строка — сам тезис или вопрос, каждый раз новыми словами. Не начинай с «мы выкатили» и не зови на сайт.",
+          "Тема — игры, жанр, визуальные новеллы, инди, разработка, Петербург или мистика. Без политики, религии, оскорблений групп людей, мата и токсичности.",
+          "Спорь с мнением, не с людьми. Тех, кто думает иначе, не обзывай.",
+          "Без спойлеров: природа артефакта, ритуал, разгадки убийств, тайная комната, скелет, финал, пожар, хоррор.",
+          "Без цены, без выдуманных фактов и без чисел, которых нет в фактах. Про ИИ — только фраза «ИИ использовался как инструмент», и лучше без неё.",
+          "Не упоминай App Store, VK Play, Android и Steam и не зови скачать. Игру можно назвать одной фразой, если без неё спор не встаёт.",
+          "Формат этого поста задан отдельно: его и держись. Если просят опрос — варианты это короткие стороны спора, без чисел и спойлеров, в тексте их списком не повторяй.",
+          "Последняя строка — вопрос или тезис, с которым хочется поспорить, новыми словами. Не повторяй концовки недавних постов.",
+        ].join(" "),
+      },
     ],
     alternateRubric: "trailer",
     alternateEveryDays: 3,
@@ -647,6 +679,11 @@ export const PROJECTS: Project[] = [
     secondDailyRubric: OLOID_VKPLAY_RUBRIC,
     secondDailyFrom: OLOID_VKPLAY_FROM,
     secondDailyHourMsk: OLOID_VKPLAY_SLOT_HOUR_MSK,
+    // Четвёртый пост суток: провокация в 17:30 МСК. 20:00 не занимает.
+    // Остановить: удалить thirdDailyRubric.
+    thirdDailyRubric: OLOID_PROVOCATION_RUBRIC,
+    thirdDailyHourMsk: OLOID_PROVOCATION_SLOT_HOUR_MSK,
+    thirdDailyUntilHourMsk: OLOID_PROVOCATION_SLOT_UNTIL_HOUR_MSK,
   },
 ];
 
@@ -664,7 +701,8 @@ export const mentionsPrice = (text: string) => PRICE_MENTION.test(text);
 const appStoreRubric = (rubricId?: string) =>
   rubricId === OLOID_APP_STORE_RUBRIC || rubricId === OLOID_APP_STORE_PROMO_RUBRIC;
 
-const noPriceRubric = (rubricId?: string) => appStoreRubric(rubricId) || rubricId === OLOID_VKPLAY_RUBRIC;
+const noPriceRubric = (rubricId?: string) =>
+  appStoreRubric(rubricId) || rubricId === OLOID_VKPLAY_RUBRIC || rubricId === OLOID_PROVOCATION_RUBRIC;
 
 function platformForbidden(rubricId: string | undefined, now: Date): string {
   if (appStoreRubric(rubricId)) return OLOID_APP_STORE_PLATFORM_FORBIDDEN;
@@ -694,7 +732,7 @@ export function factsFor(p: Project, now = new Date(), rubricId?: string): strin
   return facts.filter((f) => !mentionsPrice(f));
 }
 
-/** Запреты для промпта. В рубриках App Store и VK Play разрешение назвать 500 ₽ заменяется на «Цену не упоминать». */
+/** Запреты для промпта. В рубриках без цены разрешение назвать 500 ₽ заменяется на «Цену не упоминать». */
 export function forbiddenFor(p: Project, rubricId?: string, now = new Date()): string[] {
   let list = p.id === "oloid" ? p.forbidden.map((f) => (f === OLOID_PLATFORM_FORBIDDEN ? platformForbidden(rubricId, now) : f)) : p.forbidden;
   if (p.id === "oloid" && rubricId === OLOID_DEV_NUMBERS_RUBRIC) {

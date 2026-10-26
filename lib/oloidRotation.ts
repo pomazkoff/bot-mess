@@ -2,7 +2,7 @@
 // App Store, VK Play и трейлер сюда не входят.
 
 import { OLOID_DEV_NUMBER_FACTS, OLOID_DEV_NUMBERS_RUBRIC } from "./devFacts.js";
-import type { Project, Rubric } from "./projects.js";
+import { OLOID_PROVOCATION_RUBRIC, type Project, type Rubric } from "./projects.js";
 
 /** Порядок — тай-брейк, когда рубрику ещё не постили. Первая в списке выходит первой. */
 export const OLOID_ROTATION_ORDER = ["backstage", "detail", "line", "ask", "petersburg", OLOID_DEV_NUMBERS_RUBRIC] as const;
@@ -72,6 +72,53 @@ export const OLOID_DATE_HOOKS: readonly DateHook[] = [
 
 export function isOloidRotationRubric(id: string): boolean {
   return (OLOID_ROTATION_ORDER as readonly string[]).includes(id);
+}
+
+/** Форматы провокации. Порядок — тай-брейк LRU: кого ещё не постили, тот первый. */
+export type ProvocationFormat = { id: string; label: string; steer: string };
+
+export const OLOID_PROVOCATION_FORMATS: readonly ProvocationFormat[] = [
+  {
+    id: "opinion",
+    label: "спорное мнение",
+    steer:
+      "Спорное мнение про визуальные новеллы или инди-игры. Смысл образца, не цитата: «визуальные новеллы — это не игры? мы так не думаем». Своими словами. Позиция команды, без оскорбления тех, кто думает иначе.",
+  },
+  {
+    id: "side",
+    label: "выбор стороны",
+    steer:
+      "Острый вопрос, где читатель выбирает сторону. Две ясные позиции про игры, жанр или разработку. Не про сюжет «Олоида» и не про политику. Слово «выборы» не пиши: это не про голосование.",
+  },
+  {
+    id: "unpopular",
+    label: "непопулярное мнение",
+    steer:
+      "Непопулярное мнение команды про игры, жанр, разработку, Петербург или мистику. От «мы», не от «я». Это мнение, не новый факт и не цифра.",
+  },
+  {
+    id: "would-you",
+    label: "а вы бы",
+    steer:
+      "Поляризующее «а вы бы…?»: читатель примеряет выбор на себя. Про игры, старый дом, Петербург, мистику или то, как играют. Без спойлера.",
+  },
+];
+
+/** Сколько провокаций уже вышло. Счёт с нуля: чётные — опрос, нечётные — ссылка. */
+export function countProvocationPosts(history: readonly { rubric?: string }[]): number {
+  return history.filter((item) => item.rubric === OLOID_PROVOCATION_RUBRIC).length;
+}
+
+/** 1-й, 3-й, 5-й… успешный пост этой рубрики — опрос. Соседний пост — нет. */
+export function provocationWantsPoll(publishedCount: number): boolean {
+  if (!Number.isFinite(publishedCount) || publishedCount < 0) return true;
+  return Math.floor(publishedCount) % 2 === 0;
+}
+
+/** Ссылка не чаще чем через один: 2-й, 4-й, 6-й…. На опросе ссылки нет. */
+export function provocationHasLink(publishedCount: number): boolean {
+  if (!Number.isFinite(publishedCount) || publishedCount < 0) return false;
+  return Math.floor(publishedCount) % 2 === 1;
 }
 
 /** Рубрики, которые сейчас можно поставить в автослот. «Реплика» и «цифры» выпадают, пока их списки пусты. */
@@ -199,9 +246,8 @@ const FINALE = /финал|концовк|развязк/iu;
 const AI = /нейросет|искусственн\p{L}*\s+интеллект|(?<![\p{L}])ии(?![\p{L}])|(?<![\p{L}])ai(?![\p{L}])/iu;
 const AI_ALLOWED = /ии использовался как инструмент/giu;
 
-/** Обычные рубрики: мистика, не хоррор; без пожара, финала, скелета и вольного ИИ. */
-export function rotationSafetyProblem(text: string, rubricId: string): string | null {
-  if (!isOloidRotationRubric(rubricId)) return null;
+/** Мистика, не хоррор; без пожара, финала, скелета и вольного ИИ. */
+export function oloidContentSafetyProblem(text: string): string | null {
   if (HORROR.test(text)) return "не хоррор: мистика, без слова «хоррор»";
   if (FIRE.test(text)) return "пожар и огонь не упоминать";
   if (FINALE.test(text)) return "финал и концовку не упоминать";
@@ -211,6 +257,39 @@ export function rotationSafetyProblem(text: string, rubricId: string): string | 
   const rest = text.replace(AI_ALLOWED, "");
   if (AI.test(rest)) return "про ИИ можно только фразу «ИИ использовался как инструмент»";
   return null;
+}
+
+/** Обычные рубрики: те же запреты содержания. Магазины и трейлер сюда не входят. */
+export function rotationSafetyProblem(text: string, rubricId: string): string | null {
+  if (!isOloidRotationRubric(rubricId)) return null;
+  return oloidContentSafetyProblem(text);
+}
+
+// Политика, религия, оскорбления групп и мат. «Выбор» и «Вера» не входят: это не «выборы» и не религия.
+const POLITICS =
+  /(?<![\p{L}])(?:политик\p{L}*|политическ\p{L}*|политтехнолог\p{L}*|выбор(?:ы|ов|ам|ами|ах)|избирател\p{L}*|голосован\p{L}*|депутат\p{L}*|госдум\p{L}*|кремл\p{L}*|оппозиц\p{L}*|пропаганд\p{L}*|идеолог\p{L}*|революц\p{L}*|санкци\p{L}*|путин\p{L}*|навальн\p{L}*|зеленск\p{L}*|трамп\p{L}*|байден\p{L}*|нацист\p{L}*|фашист\p{L}*|расист\p{L}*|войн(?:а|ы|е|у|ой|ами|ах))(?![\p{L}])/iu;
+const RELIGION =
+  /(?<![\p{L}])(?:религи\p{L}*|церков\p{L}*|храм\p{L}*|мечет\p{L}*|синагог\p{L}*|молитв\p{L}*|аллах\p{L}*|иисус\p{L}*|христ\p{L}*|православ\p{L}*|мусульман\p{L}*|иудаизм\p{L}*|иуде\p{L}*|будд\p{L}*|атеист\p{L}*|священн\p{L}*|бог(?:а|у|ом|и|ов|ам|ами|ах)?|боже)(?![\p{L}])/iu;
+const INSULT =
+  /(?<![\p{L}])(?:идиот\p{L}*|дебил\p{L}*|мраз\p{L}*|урод(?:а|у|ом|ы|ов|ец|ка|ки|ку|кой)?|быдл\p{L}*|нищеброд\p{L}*|тупиц\p{L}*|пидор\p{L}*|пидар\p{L}*|гомик\p{L}*|хач(?:и|ей|ам|ами|ах)?|чурк(?:а|и|е|у|ой|ам|ами)?|жид(?:а|у|ом|ы|ов|ам|ами|ах|е)?|ниггер\p{L}*|негр(?:а|у|ом|ы|ов|е|и)?|хохл(?:а|у|ом|ы|ов|ам|ами|ах|е)?|москал\p{L}*|сук(?:а|и|е|у|ой)|мудак\p{L}*|хуй\p{L}*|пизд\p{L}*|бля(?:дь|ть)|[её]ба\p{L}*)(?![\p{L}])/iu;
+const PROVOCATION_CTA =
+  /(?<![\p{L}])скачай(?:те)?(?![\p{L}])|(?<![\p{L}])скачать(?![\p{L}])|(?<![\p{L}])скачива\p{L}*(?![\p{L}])|(?<![\p{L}])загляни(?:те)?(?![\p{L}])|(?<![\p{L}])заходи(?:те)?(?![\p{L}])|(?<![\p{L}])переходи(?:те)?(?![\p{L}])|по\s+ссылке|(?<![\p{L}])успей(?:те)?(?![\p{L}])|не\s+пропусти/iu;
+
+/** Политика, религия, оскорбления и мат — пост с ними не публикуем. */
+export function provocationLexiconProblem(text: string): string | null {
+  if (POLITICS.test(text)) return "политика: такой пост не публикуем";
+  if (RELIGION.test(text)) return "религия: такой пост не публикуем";
+  if (INSULT.test(text)) return "оскорбление или мат: такой пост не публикуем";
+  return null;
+}
+
+/** Провокация: лексикон, спойлеры обычных рубрик и призыв скачать. Ссылку проверяет ruleCheck отдельно. */
+export function provocationProblem(text: string): string | null {
+  return (
+    provocationLexiconProblem(text) ??
+    oloidContentSafetyProblem(text) ??
+    (PROVOCATION_CTA.test(text) ? "провокация: без призыва скачать или перейти" : null)
+  );
 }
 
 /** 2–4 варианта, каждый 1–25 символов. Без чисел: опрос не источник фактов. */
@@ -243,6 +322,9 @@ export function pickCharacterLine(lastUsed: Readonly<Record<string, string | und
 const STORE_TONE_RUBRICS = new Set(["appstore", "appstore-promo", "vkplay", "trailer"]);
 
 export function toneNoteForRubric(tone: SlotTone, rubricId: string): string {
+  if (rubricId === OLOID_PROVOCATION_RUBRIC) {
+    return "Слот провокации: спорный тезис или вопрос, коротко. Атмосфера не вместо спора. Новых чисел тон не разрешает.";
+  }
   return slotToneNote(tone, {
     store: STORE_TONE_RUBRICS.has(rubricId),
     numbersOnly: rubricId === OLOID_DEV_NUMBERS_RUBRIC,

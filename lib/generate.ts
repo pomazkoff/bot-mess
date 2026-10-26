@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { OLOID_DEV_NUMBERS_RUBRIC, devNumberProblem } from "./devFacts.js";
-import { isOloidRotationRubric, quietProblem, rotationSafetyProblem } from "./oloidRotation.js";
-import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, factsFor, forbiddenFor, mentionsPrice, mskCalendarDay, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC, OLOID_VKPLAY_FROM, OLOID_VKPLAY_RUBRIC, oloidRedeemUrl, promoActive, redactAppStoreCodes, type DetectiveRef, type Project, type Rubric } from "./projects.js";
+import { OLOID_DEV_NUMBERS_RUBRIC, devNumberProblem, numberTokens } from "./devFacts.js";
+import { isOloidRotationRubric, provocationProblem, quietProblem, rotationSafetyProblem } from "./oloidRotation.js";
+import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, factsFor, forbiddenFor, mentionsPrice, mskCalendarDay, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_VKPLAY_FROM, OLOID_VKPLAY_RUBRIC, oloidRedeemUrl, promoActive, redactAppStoreCodes, type DetectiveRef, type Project, type Rubric } from "./projects.js";
 import type { HistoryItem } from "./store.js";
 
 const client = new Anthropic(); // ANTHROPIC_API_KEY из env
@@ -36,6 +36,8 @@ export type DraftHints = {
   wantPoll?: boolean;
   characterLine?: string;
   shownNote?: string; // карусель или ролик: описать видимое
+  provocation?: boolean;
+  formatNote?: string; // формат провокации: спор, сторона, непопулярное мнение, «а вы бы»
 };
 
 export async function draftPost(
@@ -63,6 +65,7 @@ export async function draftPost(
   const season = p.seasonalHint?.(now);
   const quiet = hints?.quiet === true;
   const wantPoll = hints?.wantPoll === true;
+  const provocation = hints?.provocation === true;
   const jsonShape = wantPoll ? '{"text": "текст поста", "options": ["вариант", "вариант"]}' : '{"text": "текст поста"}';
 
   const system = `Ты пишешь посты для Threads от лица автора проекта «${p.name}». Пишешь по-русски.
@@ -81,7 +84,11 @@ ${p.id === "buro" ? "\nМемная отсылка к детективному �
 ФОРМАТ: до ${MAX_LEN} символов вместе со ссылкой${p.id === "oloid" ? " (пустые строки между абзацами тоже считаются — пиши короткими абзацами по одной-две связанные фразы, не разбивай каждую фразу отдельной строкой)" : ""}. Живой текст, не пресс-релиз. Ответь ТОЛЬКО JSON без markdown:
 ${jsonShape}`;
 
-  const linkLine = quiet
+  const linkLine = provocation && quiet
+    ? "Ссылку не ставь и не показывай адрес. Не зови скачать, зайти на сайт, перейти или поиграть по ссылке. Это спор, не реклама. Последняя строка — вопрос или тезис, с которым хочется поспорить, даже если голос выше просит приглашение на сайт."
+    : provocation
+      ? `В самом конце, после пустой строки, поставь ссылку ровно так, без изменений: ${link} Это не реклама: не зови скачать, не пиши «переходи» и «по ссылке», цену не называй. Последняя строка перед ссылкой — вопрос для спора, новыми словами.`
+    : quiet
     ? "Ссылку не ставь и не показывай адрес. Не зови скачать, зайти на сайт, перейти или поиграть по ссылке. Это разговор: наблюдение или вопрос читателю. Последняя строка — не приглашение на сайт, даже если голос выше просит приглашение."
     : p.requireLink
       ? `Обязательно поставь в конце ссылку ровно так, без изменений: ${link}`
@@ -91,12 +98,15 @@ ${jsonShape}`;
 
   const user = `Рубрика: ${rubric.brief}
 ${topic ? `Тема поста: ${topic}` : ""}
+${hints?.formatNote ? `Формат этого поста: ${hints.formatNote}` : ""}
 ${hints?.toneNote ? `Тон слота: ${hints.toneNote}` : ""}
 ${hints?.dateSteer ? `Повод дня (одна обычная публикация, без новых фактов): ${hints.dateSteer}` : ""}
 ${hints?.devFact ? `ЕДИНСТВЕННЫЙ числовой факт этого поста. Другие числа из фактов проекта не копируй:\n• ${hints.devFact}` : ""}
 ${hints?.characterLine ? `Единственная допустимая реплика, дословно и в кавычках: ${hints.characterLine}` : ""}
 ${hints?.shownNote ? hints.shownNote : pictureNote ? `К посту будет приложена картинка из игры: ${pictureNote}. Можно опереться на одну её деталь; не описывай картинку целиком, не пиши «на картинке» и не добавляй того, чего на ней нет.` : ""}
-${wantPoll ? "К посту будет опрос Threads: 2–4 варианта, каждый от 1 до 25 символов, без цифр, ссылок, цены и спойлеров. Варианты — короткие ответы читателя, не факты об игре. В тексте задай вопрос и не перечисляй варианты списком." : ""}
+${wantPoll ? (provocation
+  ? "К посту будет опрос Threads: 2–4 варианта, каждый от 1 до 25 символов, без цифр, ссылок, цены, политики, религии и оскорблений. Варианты — короткие стороны спора, не факты об игре. В тексте задай вопрос и не перечисляй варианты списком."
+  : "К посту будет опрос Threads: 2–4 варианта, каждый от 1 до 25 символов, без цифр, ссылок, цены и спойлеров. Варианты — короткие ответы читателя, не факты об игре. В тексте задай вопрос и не перечисляй варианты списком.") : ""}
 ${linkLine}
 ${code ? `Единственный код этого поста — вставь отдельной строкой ровно так, без изменений: ${code}\nЭто одноразовая бесплатная загрузка в App Store: код вводят там же, забирает первый. Других кодов нет и выдумывать их нельзя. Код оставь и в тексте отдельной строкой, без ссылки вокруг: его копируют вручную. Коротко скажи, что нажатие на ссылку само подставит код в App Store. Призыв в конце своими словами: скачать, поиграть и оставить отзыв. Фразу «скачай — поиграй — оставь отзыв» не копируй. Цену не упоминать.` : ""}
 ${season ? `Сезонный повод (по желанию): ${season}` : ""}
@@ -226,6 +236,10 @@ export function ruleCheck(
     if (!rubric || !p.promo.rubrics.includes(rubric.id)) return `промокод ${p.promo.code} — только в постах-предложениях, здесь убери`;
   }
   for (const re of p.stopList ?? []) if (re.test(text)) return `штамп ${re} — перепиши фразу целиком, не синонимом`;
+  if (rubric?.id === OLOID_PROVOCATION_RUBRIC) {
+    const provocationIssue = provocationProblem(text) ?? provocationNumberProblem(text, factsFor(p, now, rubric.id).join("\n"));
+    if (provocationIssue) return provocationIssue;
+  }
   if (rubric) {
     const safety = rotationSafetyProblem(text, rubric.id);
     if (safety) return safety;
@@ -234,8 +248,12 @@ export function ruleCheck(
     const numbers = devNumberProblem(text, devFact);
     if (numbers) return numbers;
   }
-  // Тихий обычный пост: ссылка не обязательна и запрещена. Остальные посты — как раньше.
-  if (quiet) return quietProblem(text);
+  // Тихий обычный пост и провокация без ссылки: URL и призыв запрещены. Остальные посты — как раньше.
+  if (quiet) {
+    const quietIssue = quietProblem(text);
+    if (quietIssue && rubric?.id === OLOID_PROVOCATION_RUBRIC && quietIssue.includes("без ссылки")) return "провокация без ссылки: URL нельзя";
+    return quietIssue;
+  }
   const urls = text.match(/https?:\/\/\S+/g) || [];
   // Белый список — ровно одна ссылка. Обычный App Store: страница приложения.
   // Redeem-ссылка разрешена только рубрике appstore-promo и только с заданным кодом. В остальные посты не пускаем.
@@ -249,7 +267,7 @@ export function ruleCheck(
 }
 
 const APP_STORE_RUBRICS = new Set<string>([OLOID_APP_STORE_RUBRIC, OLOID_APP_STORE_PROMO_RUBRIC]);
-const NO_PRICE_RUBRICS = new Set<string>([OLOID_APP_STORE_RUBRIC, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_VKPLAY_RUBRIC]);
+const NO_PRICE_RUBRICS = new Set<string>([OLOID_APP_STORE_RUBRIC, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_VKPLAY_RUBRIC, OLOID_PROVOCATION_RUBRIC]);
 // Эксклюзив App Store: такие формулировки пост отклоняют. «Уже в App Store» и «на iPhone и iPad» без «только» — можно.
 const APP_STORE_EXCLUSIVITY =
   /эксклюзив|ios[-\s]?only|только[^.\n]{0,50}(?:app\s*store|ios|iphone|ipad|айфон)|(?:app\s*store|ios)[^.\n]{0,60}только|других\s+платформ|других\s+площадк|больше\s+нигде|нигде\s+больше|единственн\p{L}*\s+(?:площадк|платформ)/iu;
@@ -274,7 +292,21 @@ export function appStoreCodeProblem(text: string, projectId: string, rubricId: s
   return null;
 }
 
-/** Посты App Store и VK Play: цена в тексте отклоняется и пост пишется заново. Одно и то же правило mentionsPrice.
+/**
+ * Провокация: чисел может не быть. Если они есть — каждое должно быть в фактах этого поста.
+ * Цена, часы прохождения и лишние числа режет devNumberProblem.
+ */
+export function provocationNumberProblem(text: string, allowedFacts: string): string | null {
+  const problem = numberTokens(text).length ? devNumberProblem(text, allowedFacts) : devNumberProblem(text, "");
+  if (!problem) return null;
+  if (problem.startsWith("цену")) return "Цену не упоминать";
+  if (problem.startsWith("число ")) return problem.replace("не из выбранного факта", "не из фактов");
+  if (problem.startsWith("в посте нет числа")) return "число не из фактов";
+  if (problem.startsWith("часы в этом посте")) return "числа и часы в провокации только если они есть в фактах";
+  return problem;
+}
+
+/** Посты App Store, VK Play и провокации: цена в тексте отклоняется и пост пишется заново. Одно и то же правило mentionsPrice.
  *  Код (цифры и латиница, без ₽) не цена. */
 export function appStorePriceProblem(text: string, projectId: string, rubricId: string): string | null {
   if (projectId !== "oloid" || !NO_PRICE_RUBRICS.has(rubricId)) return null;
@@ -441,6 +473,14 @@ function appStoreFactNote(rubricId?: string, promoCode?: string): string {
   return `${common}Промокоды и бесплатную раздачу в этом посте отклоняй: это другой тип поста.\n`;
 }
 
+function provocationFactNote(rubricId?: string, quiet?: boolean): string {
+  if (rubricId !== OLOID_PROVOCATION_RUBRIC) return "";
+  const link = quiet
+    ? "Ссылки нет специально. Не отклоняй из-за отсутствия ссылки. Призыв скачать, зайти на сайт или перейти по ссылке — отклоняй."
+    : "Ссылка на oloid-game.ru с UTM в конце допустима. Не требуй призыв скачать.";
+  return `Это провокационный пост: спорное мнение или вопрос про игры, жанр, разработку, Петербург или мистику. Мнение о визуальных новеллах и инди вообще — не факт о проекте. Не отклоняй его, если «Олоиду» не приписано того, чего нет в фактах. Отклоняй политику, религию, оскорбления групп людей, мат, токсичность, спойлеры, хоррор, пожар, финал, скелет, тайную комнату, цену и любые числа, которых нет в фактах. Пост не должен быть рекламой. ${link}\n`;
+}
+
 function vkPlayFactNote(rubricId?: string): string {
   if (rubricId !== OLOID_VKPLAY_RUBRIC) return "";
   return "Это пост рубрики VK Play. Факт, не отклоняй: «Олоид» вышел на VK Play. Ссылку в конце не отклоняй: это страница игры на VK Play, UTM нет специально. «Олоид» — мистическая визуальная новелла, не хоррор: «хоррор», horror и «ужастик» отклоняй. Пожар, огонь, финал, концовки, скелет, убийц и кадр «олоид на ладони» отклоняй. Яркий момент из фактов и кадра можно. Цену не упоминать. Если в посте есть цена — отклоняй. Про ИИ допустима только фраза «ИИ использовался как инструмент»; другие формулировки про нейросети отклоняй. Промокоды отклоняй.\n";
@@ -466,6 +506,9 @@ function oloidCheckNote(rubricId?: string, now = new Date()): string {
   if (rubricId === OLOID_VKPLAY_RUBRIC) {
     return `${style}«Вышло на VK Play» — факт этого поста, не отклоняй. Выход на Android или Steam — нет. Цену не упоминать. Если в посте есть цена — отклоняй.\n`;
   }
+  if (rubricId === OLOID_PROVOCATION_RUBRIC) {
+    return `${style}Цену не упоминать. Если в посте есть цена — отклоняй. Это не пост магазина: не требуй новость об App Store или VK Play и не требуй ссылку, если её нет.\n`;
+  }
   if (rubricId === OLOID_APP_STORE_RUBRIC || rubricId === OLOID_APP_STORE_PROMO_RUBRIC) {
     return `${style}«Вышло на iOS / iPhone / iPad» и «App Store» допустимы, когда они есть в фактах. «Эксклюзив», «только в App Store», «только на iOS», «iOS-only» и «на других платформах релиза не было» — отклоняй. Про VK Play в этом посте не пиши. Выход на Android или Steam — нет. Цену не упоминать. Если в посте есть цена — отклоняй.\n`;
   }
@@ -485,7 +528,7 @@ export async function factCheck(
 ): Promise<string | null> {
   const r = await askJson<{ ok: boolean; reason: string }>(
     `Ты строгий редактор-фактчекер. Проверь пост о проекте «${p.name}».
-${p.id === "oloid" ? oloidCheckNote(opts?.rubricId, now) : ""}${rotationFactNote(opts?.rubricId, opts?.devFact, opts?.quiet)}${appStoreFactNote(opts?.rubricId, opts?.promoCode)}${vkPlayFactNote(opts?.rubricId)}${p.id === "buro" ? `Отсылки к детективам — стиль и шутка, не факты о проекте. Допустимы только эти якоря, каждый своим героем:\n${BURO_DETECTIVE_REFS.map((ref) => `• ${ref.hint}`).join("\n")}\nНе отклоняй такую шутку, если она узнаваемая и не приписана чужому персонажу. Отклоняй, если пост утверждает, что сервис основан на фильме, снят по нему или связан с правообладателем, если цитата приписана не тому герою, если раскрыта развязка или описана жестокость, или если шутка непристойная.\n` : ""}Допустимые факты:
+${p.id === "oloid" ? oloidCheckNote(opts?.rubricId, now) : ""}${rotationFactNote(opts?.rubricId, opts?.devFact, opts?.quiet)}${provocationFactNote(opts?.rubricId, opts?.quiet)}${appStoreFactNote(opts?.rubricId, opts?.promoCode)}${vkPlayFactNote(opts?.rubricId)}${p.id === "buro" ? `Отсылки к детективам — стиль и шутка, не факты о проекте. Допустимы только эти якоря, каждый своим героем:\n${BURO_DETECTIVE_REFS.map((ref) => `• ${ref.hint}`).join("\n")}\nНе отклоняй такую шутку, если она узнаваемая и не приписана чужому персонажу. Отклоняй, если пост утверждает, что сервис основан на фильме, снят по нему или связан с правообладателем, если цитата приписана не тому герою, если раскрыта развязка или описана жестокость, или если шутка непристойная.\n` : ""}Допустимые факты:
 ${factsFor(p, now, opts?.rubricId).map((f) => `• ${f}`).join("\n")}
 Запрещено:
 ${forbiddenFor(p, opts?.rubricId, now).map((f) => `• ${f}`).join("\n")}
