@@ -3,7 +3,7 @@ import { appStorePromoOpen, makeDraft, mskDay } from "../lib/run.js";
 import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_VKPLAY_RUBRIC } from "../lib/projects.js";
 import { postAlreadyPublished, publishPost } from "../lib/threads.js";
 import { OLOID_ASK_RUBRIC, isOloidRotationRubric } from "../lib/oloidRotation.js";
-import { getAppStoreCodesUsed, getAppStoreDay, getHistory, getLastProject, getOloidRotationState, getProvocationDay, getProvocationState, getVkPlayDay, markAppStoreCodeUsed, pushHistory, saveOloidRotation, saveProvocation, setAppStoreDay, setLastProject, setProvocationDay, setVkPlayDay } from "../lib/store.js";
+import { getAppStoreCodesUsed, getAppStoreDay, getHistory, getLastProject, getOloidRotationState, getProvocationDay, getProvocationState, getVkPlayDay, markAppStoreCodeUsed, pushHistory, saveOloidFacts, saveOloidRotation, saveProvocation, setAppStoreDay, setLastProject, setProvocationDay, setVkPlayDay } from "../lib/store.js";
 import { notify } from "../lib/notify.js";
 import { channelById } from "../lib/channels.js";
 import { publishDueScheduled } from "../lib/scheduled.js";
@@ -110,13 +110,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       usedAppStoreCodes,
       rubricUsed: rotation?.rubricUsed,
       devFactUsed: rotation?.devFactUsed,
+      factUsed: rotation?.factUsed,
       lineUsed: rotation?.lineUsed,
       regularCount: rotation?.regularCount,
       dateHooks: rotation?.dateHooks,
       lastAskWasPoll: rotation?.lastAskWasPoll,
       mediaUsed: rotation?.mediaUsed,
     });
-    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, lineId, tone, regularCount, mediaId, provocationFormat, provocationCount } = draft;
+    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, factIds, lineId, tone, regularCount, mediaId, provocationFormat, provocationCount } = draft;
     const where = `${channel.name} · ${project.name}`;
 
     // Ссылка VK Play ещё заглушка: пост не генерируем и не публикуем. День закрываем, чтобы следующий слот суток не пропускался тоже.
@@ -148,6 +149,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         poll,
         dateHook,
         devFactId,
+        factIds,
         tone,
         text,
         rejected,
@@ -188,6 +190,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     // Код списывается только здесь: после успешного publishPost. Превью, dry и сбой публикации сюда не доходят.
     if (promoCode) await markAppStoreCodeUsed(project.id, promoCode);
+    if (project.id === "oloid" && factIds?.length) await saveOloidFacts(project.id, factIds, now.toISOString());
     const pollOptions = poll && !pollDropped ? [poll.option_a, poll.option_b, poll.option_c, poll.option_d].filter((option): option is string => Boolean(option)) : undefined;
     if (isOloidRotationRubric(rubricId)) {
       await saveOloidRotation(project.id, {
@@ -217,6 +220,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       pollOptions,
       dateHook,
       devFactId,
+      factIds,
       lineId,
       mediaId: used ? mediaId : undefined,
       provocationFormat,
@@ -234,7 +238,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ].filter(Boolean);
     const mediaNote = !used ? "" : used.type === "CAROUSEL" ? ", с каруселью" : used.type === "VIDEO" ? ", с видео" : ", с картинкой";
     await notify(`✅ Опубликовано (${where}, ${rubricId}${mediaNote}${marks.length ? `, ${marks.join(", ")}` : ""}):${topic ? `\nТема: ${topic}` : ""}${topicTag ? `\nТема Threads: ${topicTag}` : ""}${promoLine}\n\n${text}`);
-    return res.json({ posted: true, channel: channel.id, project: project.id, rubric: rubricId, topic, media: used?.type === "CAROUSEL" ? used.urls : used?.url, mediaId: used ? mediaId : undefined, promoCode, promoLeft, quiet, poll: pollOptions, pollDropped, dateHook, devFactId, provocationFormat, tone, postId, text });
+    return res.json({ posted: true, channel: channel.id, project: project.id, rubric: rubricId, topic, media: used?.type === "CAROUSEL" ? used.urls : used?.url, mediaId: used ? mediaId : undefined, promoCode, promoLeft, quiet, poll: pollOptions, pollDropped, dateHook, devFactId, factIds, provocationFormat, tone, postId, text });
   } catch (e: any) {
     console.error(e);
     await notify(`❌ Threads-бот упал (${channel.name}): ${e?.message ?? e}`);

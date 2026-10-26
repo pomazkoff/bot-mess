@@ -12,6 +12,7 @@ import {
   matchingDateHook,
   oloidSlotTone,
   pickLeastRecent,
+  pickLeastRecentMany,
   pollOptionsProblem,
   provocationHasLink,
   provocationLexiconProblem,
@@ -20,7 +21,7 @@ import {
   rotationSafetyProblem,
   usedDateHookIds,
 } from "./oloidRotation.js";
-import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_FROM, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RETIRED_CODES, PROJECTS, factsFor, nextAppStoreCode, oloidRedeemUrl, redactAppStoreCodes, spentAppStoreCodes } from "./projects.js";
+import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_FROM, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RETIRED_CODES, OLOID_FACT_SAMPLE, OLOID_POOL_FACTS, PROJECTS, factsFor, factsForPrompt, nextAppStoreCode, oloidRedeemUrl, redactAppStoreCodes, spentAppStoreCodes } from "./projects.js";
 import { appStorePromoOpen, pickPicture, pickRubric } from "./run.js";
 import type { HistoryItem } from "./store.js";
 import { existsSync, readFileSync } from "node:fs";
@@ -37,7 +38,31 @@ const banned = ["94", "TLENUM", "достижен", "secret", "нише", "ло�
 const blob = OLOID_DEV_NUMBER_FACTS.map((fact) => fact.text).join("\n");
 for (const word of banned) assert.equal(blob.includes(word), false, word);
 assert.equal(new Set(OLOID_DEV_NUMBER_FACTS.map((fact) => fact.id)).size, OLOID_DEV_NUMBER_FACTS.length);
-assert.ok(OLOID_DEV_NUMBER_FACTS.length > 0);
+assert.ok(OLOID_DEV_NUMBER_FACTS.length > 80);
+assert.equal(new Set(OLOID_POOL_FACTS.map((fact) => fact.id)).size, OLOID_POOL_FACTS.length);
+assert.ok(OLOID_POOL_FACTS.length > 50);
+const poolBlob = OLOID_POOL_FACTS.map((fact) => fact.text).join("\n");
+for (const word of ["шпател", "гвозд", "₽", "достижен", "тайник", "скелет", "ладон", "сейф", "game/", ".rpy", ".png", "images/", "Loc_", "ach_grant"]) {
+  assert.equal(poolBlob.toLowerCase().includes(word.toLowerCase()), false, word);
+}
+const passport = factsFor(oloid, evening, "backstage");
+const sampleIds = OLOID_POOL_FACTS.slice(0, OLOID_FACT_SAMPLE).map((fact) => fact.id);
+const sampled = factsForPrompt(oloid, evening, "backstage", sampleIds);
+assert.equal(sampled.length, passport.length + OLOID_FACT_SAMPLE);
+assert.ok(sampled.length < passport.length + OLOID_POOL_FACTS.length);
+assert.equal(factsForPrompt(oloid, evening, "dev-numbers", OLOID_POOL_FACTS.map((fact) => fact.id)).length, factsFor(oloid, evening, "dev-numbers").length);
+assert.deepEqual(
+  pickLeastRecentMany(OLOID_POOL_FACTS, {}, OLOID_FACT_SAMPLE).map((fact) => fact.id),
+  sampleIds,
+);
+assert.deepEqual(
+  pickLeastRecentMany(OLOID_POOL_FACTS, Object.fromEntries(sampleIds.map((id) => [id, "2026-10-26T00:00:00.000Z"])), OLOID_FACT_SAMPLE).map((fact) => fact.id),
+  OLOID_POOL_FACTS.slice(OLOID_FACT_SAMPLE, OLOID_FACT_SAMPLE * 2).map((fact) => fact.id),
+);
+const sunday = OLOID_DEV_NUMBER_FACTS.find((fact) => fact.id === "commits-sunday");
+assert.ok(sunday);
+assert.equal(devNumberProblem("в воскресенье 209 коммитов из 666", sunday.text), null);
+assert.ok(devNumberProblem("209 коммитов и ещё 12", sunday.text));
 
 const pool = eligibleRotationRubrics(oloid);
 assert.deepEqual(
@@ -155,6 +180,7 @@ assert.ok(provocationLexiconProblem("вы идиоты"));
 assert.equal(pollOptionsProblem(["игра", "книга"]), null);
 assert.ok(provocationLexiconProblem("церковь\nдвор"));
 
+assert.equal(lowercaseSentenceStarts("Лев Мамбетов озвучил Егора"), "Лев Мамбетов озвучил Егора");
 assert.equal(lowercaseSentenceStarts("ИИ использовался как инструмент"), "ИИ использовался как инструмент");
 assert.equal(lowercaseSentenceStarts("ии использовался как инструмент"), "ИИ использовался как инструмент");
 assert.equal(rotationSafetyProblem("ИИ использовался как инструмент, и всё", "backstage"), null);

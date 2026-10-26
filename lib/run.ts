@@ -12,6 +12,7 @@ import {
   oloidSlotTone,
   pickCharacterLine,
   pickLeastRecent,
+  pickLeastRecentMany,
   pollOptionsProblem,
   provocationHasLink,
   provocationLexiconProblem,
@@ -24,7 +25,7 @@ import {
   type PollAttachment,
   type SlotTone,
 } from "./oloidRotation.js";
-import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, mskCalendarDay, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_FROM, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_PROVOCATION_SLOT_HOUR_MSK, OLOID_PROVOCATION_SLOT_UNTIL_HOUR_MSK, OLOID_VKPLAY_RUBRIC, OLOID_VKPLAY_SKIP_REASON, OLOID_VKPLAY_SLOT_HOUR_MSK, PROJECTS, pickWeighted, spentAppStoreCodes, vkPlayUrlBlocked, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
+import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, factsForPrompt, mskCalendarDay, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_FROM, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RUBRIC, OLOID_FACT_SAMPLE, OLOID_POOL_FACTS, OLOID_PROVOCATION_RUBRIC, OLOID_PROVOCATION_SLOT_HOUR_MSK, OLOID_PROVOCATION_SLOT_UNTIL_HOUR_MSK, OLOID_VKPLAY_RUBRIC, OLOID_VKPLAY_SKIP_REASON, OLOID_VKPLAY_SLOT_HOUR_MSK, PROJECTS, pickWeighted, spentAppStoreCodes, vkPlayUrlBlocked, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
 import type { HistoryItem } from "./store.js";
 import type { Channel } from "./channels.js";
 import { pickRegularShown } from "./variety.js";
@@ -46,6 +47,8 @@ export type Draft = {
   poll?: PollAttachment;
   dateHook?: string;
   devFactId?: string;
+  /** Хвост фактов, который ушёл в промпт. В Redis — после успешной публикации. */
+  factIds?: string[];
   lineId?: string;
   tone?: SlotTone;
   /** Сколько обычных постов уже вышло до этого. Тихий — каждый третий. */
@@ -331,6 +334,7 @@ export async function makeDraft(opts: {
   /** Очередь обычных рубрик «Олоида». null у счётчика — считаем по истории. */
   rubricUsed?: Record<string, string>;
   devFactUsed?: Record<string, string>;
+  factUsed?: Record<string, string>;
   lineUsed?: Record<string, string>;
   regularCount?: number | null;
   dateHooks?: Record<string, string>;
@@ -353,6 +357,7 @@ export async function makeDraft(opts: {
     usedAppStoreCodes = null,
     rubricUsed = {},
     devFactUsed = {},
+    factUsed = {},
     lineUsed = {},
     regularCount: storedRegularCount = null,
     dateHooks = {},
@@ -448,6 +453,19 @@ export async function makeDraft(opts: {
   const detective = project.id === "buro" ? pickDetectiveRef(history, project.forceNextRef) : undefined;
   const promoCode = promoCodeForRubric(rubric.id, nextCode, promoScheduled, forcedRubric);
   const promoLeft = promoCode ? OLOID_APP_STORE_CODES.length - spent.length - 1 : undefined;
+  const pool =
+    project.id === "oloid" && rubric.id !== OLOID_DEV_NUMBERS_RUBRIC
+      ? pickLeastRecentMany(
+          OLOID_POOL_FACTS,
+          mergeLastUsed(
+            factUsed,
+            projectHistory.flatMap((item) => (item.factIds ?? []).map((id) => ({ id, at: item.at }))),
+          ),
+          OLOID_FACT_SAMPLE,
+        )
+      : [];
+  const factIds = pool.map((fact) => fact.id);
+  const factLines = factsForPrompt(project, now, rubric.id, factIds);
   const base = {
     project,
     rubricId: rubric.id,
@@ -459,6 +477,7 @@ export async function makeDraft(opts: {
     quiet,
     dateHook: dateHook?.id,
     devFactId: devFact?.id,
+    factIds: factIds.length ? factIds : undefined,
     lineId: line?.id,
     tone,
     regularCount,
@@ -479,6 +498,7 @@ export async function makeDraft(opts: {
     toneNote: tone ? toneNoteForRubric(tone, rubric.id) : undefined,
     dateSteer: dateHook?.steer,
     devFact: devFact?.text,
+    factLines,
     wantPoll,
     characterLine: line ? `${line.speaker}: «${line.line}». ${line.note}` : undefined,
     shownNote: shown?.note,
@@ -490,7 +510,7 @@ export async function makeDraft(opts: {
     const drafted = await draftPost(project, rubric, history, now, feedback, topic, channel.voiceNote, linkContent, picture?.about, detective?.hint, promoCode, hints);
     const candidate = drafted.text;
     const problem =
-      ruleCheck(candidate, project, now, rubric, linkContent, promoCode, quiet, devFact?.text) ??
+      ruleCheck(candidate, project, now, rubric, linkContent, promoCode, quiet, devFact?.text, factLines.join("\n")) ??
       appStoreCodeProblem(candidate, project.id, rubric.id, promoCode) ??
       appStorePriceProblem(candidate, project.id, rubric.id) ??
       appStoreMomentProblem(candidate, project.id, rubric.id) ??
@@ -498,7 +518,7 @@ export async function makeDraft(opts: {
       (detective ? detectiveRefProblem(candidate, history, detective) : null) ??
       repeatedEnding(candidate, history, project.id) ??
       tooSimilar(candidate, history) ??
-      (await factCheck(candidate, project, shown?.note ?? picture?.about, now, { rubricId: rubric.id, promoCode, devFact: devFact?.text, quiet }));
+      (await factCheck(candidate, project, shown?.note ?? picture?.about, now, { rubricId: rubric.id, promoCode, devFact: devFact?.text, quiet, factLines }));
     if (problem) {
       feedback = problem;
       rejected.push(`${problem}: ${candidate}`);

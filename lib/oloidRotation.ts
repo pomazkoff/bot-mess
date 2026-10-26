@@ -154,6 +154,26 @@ export function pickLeastRecent<T extends { id: string }>(
   return best;
 }
 
+/** Несколько самых давно не использованных. Ничья — порядок списка. */
+export function pickLeastRecentMany<T extends { id: string }>(
+  items: readonly T[],
+  lastUsed: Readonly<Record<string, string | undefined>>,
+  count: number,
+): T[] {
+  if (count <= 0 || !items.length) return [];
+  const stamp = (id: string) => {
+    const raw = lastUsed[id];
+    if (!raw) return 0;
+    const at = Date.parse(raw);
+    return Number.isNaN(at) ? 0 : at;
+  };
+  return items
+    .map((item, index) => ({ item, index, at: stamp(item.id) }))
+    .sort((a, b) => a.at - b.at || a.index - b.index)
+    .slice(0, Math.min(count, items.length))
+    .map((row) => row.item);
+}
+
 /** Redis побеждает, если метка новее. События из истории дописывают дыры. */
 export function mergeLastUsed(
   redis: Readonly<Record<string, string | undefined>>,

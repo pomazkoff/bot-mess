@@ -33,6 +33,7 @@ export type DraftHints = {
   toneNote?: string;
   dateSteer?: string;
   devFact?: string; // единственный числовой факт рубрики dev-numbers
+  factLines?: string[]; // паспорт и выборка хвоста; без поля — весь паспорт, как раньше
   wantPoll?: boolean;
   characterLine?: string;
   shownNote?: string; // карусель или ролик: описать видимое
@@ -68,13 +69,14 @@ export async function draftPost(
   const provocation = hints?.provocation === true;
   const jsonShape = wantPoll ? '{"text": "текст поста", "options": ["вариант", "вариант"]}' : '{"text": "текст поста"}';
 
+  const factLines = hints?.factLines ?? factsFor(p, now, rubric.id);
   const system = `Ты пишешь посты для Threads от лица автора проекта «${p.name}». Пишешь по-русски.
 
 ГОЛОС:
 ${p.voice}
 ${voiceNote ? `\nАККАУНТ:\n${voiceNote}\n` : ""}
 ФАКТЫ (единственный допустимый источник утверждений о проекте):
-${factsFor(p, now, rubric.id).map((f) => `• ${f}`).join("\n")}
+${factLines.map((f) => `• ${f}`).join("\n")}
 
 ЗАПРЕЩЕНО:
 ${forbiddenFor(p, rubric.id, now).map((f) => `• ${f}`).join("\n")}
@@ -145,7 +147,7 @@ ${feedback ? `\nПредыдущий вариант отклонён: ${feedback
 // Строчный стиль «Олоида»: первая буква поста, строки и фразы — строчная.
 // Имена собственные из короткого списка не трогаем. Середину фразы не переписываем.
 const OLOID_PROPER =
-  /^(?:олоид\p{L}*|егор\p{L}*|яковлев\p{L}*|вер(?:а|ы|е|у|ой)|алик(?:а|у|ом|е)?|фед(?:я|и|е|ю|ей)|следовател\p{L}*|старушк\p{L}*|бабушк\p{L}*|сон(?:я|и|е|ю|ей)|disco|elysium|steam|android|ios|app|серафим\p{L}*|павловн\p{L}*|конюшенн\p{L}*|исаакиевск\p{L}*|зайчик\p{L}*|петербург(?:а|у|е|ом)?|санкт-петербург(?:а|у|е|ом)?|питер(?:а|у|е|ом)?|лиза|лизы|лизе|лизу|лизой|витя|вити|вите|витю|витей|тонет(?:а|у|е|ом)|ren|vk)$/iu;
+  /^(?:олоид\p{L}*|егор\p{L}*|яковлев\p{L}*|вер(?:а|ы|е|у|ой)|алик(?:а|у|ом|е)?|фед(?:я|и|е|ю|ей)|следовател\p{L}*|следак(?:а|у|ом|е)?|старушк\p{L}*|бабушк\p{L}*|сон(?:я|и|е|ю|ей)|disco|elysium|steam|android|ios|app|серафим\p{L}*|павловн\p{L}*|конюшенн\p{L}*|исаакиевск\p{L}*|зайчик\p{L}*|петербург(?:а|у|е|ом)?|санкт-петербург(?:а|у|е|ом)?|питер(?:а|у|е|ом)?|лиза|лизы|лизе|лизу|лизой|витя|вити|вите|витю|витей|тонет(?:а|у|е|ом)|ren|vk|илья|ильи|илье|илью|ильёй|лев|мамбетов\p{L}*|галин\p{L}*|масайкин\p{L}*|адел\p{L}*|соснов\p{L}*|олег\p{L}*|абдуназаров\p{L}*|анастаси\p{L}*|донских|виктори\p{L}*|углянск\p{L}*|елизавет\p{L}*|помазков\p{L}*|евгени\p{L}*|ионов\p{L}*|андрей|андрея|андрею|андреем|капустин\p{L}*|mazkof|jost|prata)$/iu;
 
 export function lowercaseSentenceStarts(text: string): string {
   const urls: string[] = [];
@@ -226,6 +228,7 @@ export function ruleCheck(
   promoCode?: string,
   quiet = false,
   devFact?: string,
+  allowedFacts?: string,
 ): string | null {
   if (!text) return "пустой текст";
   if (text.length > MAX_LEN) return `длина ${text.length} > ${MAX_LEN}`;
@@ -237,7 +240,7 @@ export function ruleCheck(
   }
   for (const re of p.stopList ?? []) if (re.test(text)) return `штамп ${re} — перепиши фразу целиком, не синонимом`;
   if (rubric?.id === OLOID_PROVOCATION_RUBRIC) {
-    const provocationIssue = provocationProblem(text) ?? provocationNumberProblem(text, factsFor(p, now, rubric.id).join("\n"));
+    const provocationIssue = provocationProblem(text) ?? provocationNumberProblem(text, allowedFacts ?? factsFor(p, now, rubric.id).join("\n"));
     if (provocationIssue) return provocationIssue;
   }
   if (rubric) {
@@ -524,12 +527,12 @@ export async function factCheck(
   p: Project,
   pictureNote?: string,
   now = new Date(),
-  opts?: { rubricId?: string; promoCode?: string; devFact?: string; quiet?: boolean },
+  opts?: { rubricId?: string; promoCode?: string; devFact?: string; quiet?: boolean; factLines?: string[] },
 ): Promise<string | null> {
   const r = await askJson<{ ok: boolean; reason: string }>(
     `Ты строгий редактор-фактчекер. Проверь пост о проекте «${p.name}».
 ${p.id === "oloid" ? oloidCheckNote(opts?.rubricId, now) : ""}${rotationFactNote(opts?.rubricId, opts?.devFact, opts?.quiet)}${provocationFactNote(opts?.rubricId, opts?.quiet)}${appStoreFactNote(opts?.rubricId, opts?.promoCode)}${vkPlayFactNote(opts?.rubricId)}${p.id === "buro" ? `Отсылки к детективам — стиль и шутка, не факты о проекте. Допустимы только эти якоря, каждый своим героем:\n${BURO_DETECTIVE_REFS.map((ref) => `• ${ref.hint}`).join("\n")}\nНе отклоняй такую шутку, если она узнаваемая и не приписана чужому персонажу. Отклоняй, если пост утверждает, что сервис основан на фильме, снят по нему или связан с правообладателем, если цитата приписана не тому герою, если раскрыта развязка или описана жестокость, или если шутка непристойная.\n` : ""}Допустимые факты:
-${factsFor(p, now, opts?.rubricId).map((f) => `• ${f}`).join("\n")}
+${(opts?.factLines ?? factsFor(p, now, opts?.rubricId)).map((f) => `• ${f}`).join("\n")}
 Запрещено:
 ${forbiddenFor(p, opts?.rubricId, now).map((f) => `• ${f}`).join("\n")}
 ${pictureNote ? `\nК посту приложена картинка из игры: ${pictureNote}. Детали, которые на ней видны, допустимы.\n` : ""}
