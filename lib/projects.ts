@@ -118,15 +118,15 @@ const OLOID_PLATFORM_FORBIDDEN_VK_OUT =
 const OLOID_APP_STORE_PLATFORM_FORBIDDEN =
   "Не пиши про VK Play. Не пиши, что игра уже вышла на Android или Steam, и не называй даты этих площадок. Не пиши «эксклюзив», «только в App Store», «только на iOS», «только на iPhone», «только для iPad», «iOS-only» и что на других платформах релиза не было. Цену не упоминать. Языки локализации не называть: их нет в фактах.";
 
-// Последний день раздачи кодов по Москве, включительно. С 2026-10-20 автоматический слот дня —
-// обычный appstore без кода и со ссылкой на страницу приложения. Коды и ключи Redis не удалять:
-// чтобы включить снова, поставь более позднюю дату. Превью &rubric=appstore-promo дату не смотрит.
-export const OLOID_APP_STORE_PROMO_UNTIL = "2026-10-19";
+// Окно автоматической раздачи по Москве, оба дня включительно.
+// До OLOID_APP_STORE_PROMO_FROM и после OLOID_APP_STORE_PROMO_UNTIL утренний слот — обычный appstore
+// без кода. То же самое, когда живые коды кончились. Превью &rubric=appstore-promo дату не смотрит.
+// Остановить раньше: сдвинуть UNTIL. Массив кодов и ключи Redis не очищать.
+export const OLOID_APP_STORE_PROMO_FROM = "2026-10-27";
+export const OLOID_APP_STORE_PROMO_UNTIL = "2027-03-31";
 
-// Одноразовые коды бесплатной загрузки. Порядок фиксирован: каждый код — один успешный пост, потом следующий.
-// В общие факты и промпты других рубрик не класть. Добавить коды — дописать в конец.
-// Остановить раздачу — сдвинуть OLOID_APP_STORE_PROMO_UNTIL. Массив не очищать.
-export const OLOID_APP_STORE_CODES = [
+// Первая партия. В выдачу не возвращается.
+const OLOID_APP_STORE_LEGACY_CODES = [
   "LW7EJRNPWFKF",
   "X6R7X4PY3ME7",
   "NLELLNH6P4F4",
@@ -139,15 +139,137 @@ export const OLOID_APP_STORE_CODES = [
   "NTPT7P6XYRYF",
 ] as const;
 
+// Коды, которые бот больше не выдаёт, даже если Redis пуст и в истории их нет.
+// Десять старых и семь первых из новой партии: их уже раздали вручную.
+// В OLOID_APP_STORE_CODES они остаются, чтобы redactAppStoreCodes их маскировал.
+export const OLOID_APP_STORE_RETIRED_CODES = [
+  ...OLOID_APP_STORE_LEGACY_CODES,
+  "LLLF94NXL73X",
+  "FE7PNKXL4ET3",
+  "WANF433KARPF",
+  "3LY4TJJP34EM",
+  "FRLW7XWWLN7N",
+  "PLMF7ETTPWML",
+  "APYAN4E4FRNH",
+] as const;
+
+// Одноразовые коды бесплатной загрузки. Порядок фиксирован: каждый код — один успешный пост, потом следующий.
+// Сначала старая партия, затем новая в исходном порядке. Снятые — OLOID_APP_STORE_RETIRED_CODES.
+// В общие факты и промпты других рубрик не класть. Добавить коды — дописать в конец.
+// Остановить раздачу — сдвинуть OLOID_APP_STORE_PROMO_UNTIL. Массив не очищать.
+export const OLOID_APP_STORE_CODES = [
+  ...OLOID_APP_STORE_LEGACY_CODES,
+  "LLLF94NXL73X",
+  "FE7PNKXL4ET3",
+  "WANF433KARPF",
+  "3LY4TJJP34EM",
+  "FRLW7XWWLN7N",
+  "PLMF7ETTPWML",
+  "APYAN4E4FRNH",
+  "4N76T3WPKRYN",
+  "9EWN4JPRHXHW",
+  "JT3MTL6ARMTR",
+  "LJAPE4K9WMTR",
+  "WH99KMWFR6XW",
+  "RR9YEFFY9LNJ",
+  "K97TJ6RE7AT7",
+  "YL33W3E3HM3W",
+  "KR9PYTAJJJET",
+  "P6ANELKX7AR7",
+  "XJ9AEMJYXHLR",
+  "XPFYTRR7YFJ3",
+  "R7JP6K6J6LX9",
+  "WYYTXFX4E3PN",
+  "NXHTXEHK9AYT",
+  "R7NEF9AXW7R4",
+  "TF3HHELW3R3E",
+  "RTJK37JTJ4H9",
+  "EYNEMK6PXJTN",
+  "3PXE39KE4P97",
+  "K6YLXJA6F6HE",
+  "33TTP3RW3M3M",
+  "6NFYP9KNFHAJ",
+  "J7EM6MNLPKYL",
+  "TEYRJMNYWA9H",
+  "YWTYAP937W9K",
+  "7XWXNH693EL3",
+  "N6H9WLAWL6HL",
+  "WX64M9FN436T",
+  "TNP74339K34A",
+  "N773XHXNX64F",
+  "7JHLPREFHK7E",
+  "6YYHLX7KKT67",
+  "J67L7RPT43NF",
+  "FTNNY64ENJ3W",
+  "3F3E6HHKFMM9",
+  "XWPTW3MJRY43",
+  "NARMEMXPP4T3",
+  "EL9EL3KXAX3H",
+  "KYJKX3JNXKRP",
+  "9RTF3XYNFHEK",
+  "TFLKMNALEFEX",
+  "6FR39W74JJYY",
+  "WTAL363EJH6J",
+  "3WPA7EF7JYYE",
+  "NPHWKKHAHAPK",
+  "TNEFEAF37X69",
+  "JEL3KWL7WM9Y",
+  "46WL3NTL7KFR",
+  "JE6KMWHL43LT",
+  "NARLXLPFJ44K",
+  "KTJK6NTPPRWL",
+  "TE9JFA9WT9F7",
+  "FLN4LAPA6W4E",
+  "63FR9K4HW3EM",
+  "AJYTPA6L44YP",
+  "M74RTT7HHE6E",
+  "KHP6W9NHEPMF",
+  "49KXKATNA3NK",
+  "6ANMHLPFKF4F",
+  "7LKXPLWWK4A9",
+  "L6J6AR4HPRYA",
+  "WY4TFFRAJXL3",
+  "MMYW67PXLFHP",
+  "LF6T7NWJ3T99",
+  "7977RWRFHHYL",
+  "WLXP973KEYY3",
+  "A96F9E7N44NF",
+  "6RTFWTAXXFLX",
+  "KWXPKR7NF6FN",
+  "WNW6KN9HMMA6",
+  "6LXYE3AF4KLX",
+  "EH4LTJKTX3LM",
+  "WNYJ3PXM9X7K",
+  "NEY3E6F9W7JY",
+  "MXNJFTLY377R",
+  "3RFPJJPJ7AW7",
+  "3KFJRHTT36HX",
+  "PXL6XYYR43HT",
+  "9KAWM6M97KYH",
+  "NHL4J3XWME4X",
+  "7P4X9EFNLXNM",
+  "T7EWW3LW9HYY",
+  "HHEEEJAAWMJY",
+  "YAMA77JPTNXM",
+  "HRL44LJNRWP6",
+  "4KWNHJTR4M3F",
+  "HL69PJ76ETN7",
+  "EJ6A6EKW9JP9",
+  "4E46LWMH4RH6",
+  "FPXRMYWTX7JF",
+  "PWY7EY7KMYKT",
+  "NFEL377WMJE6",
+] as const;
+
 /** Убирает коды из текста, который уходит в промпт других постов. */
 export function redactAppStoreCodes(text: string): string {
   if (!OLOID_APP_STORE_CODES.length) return text;
   return text.replace(new RegExp(OLOID_APP_STORE_CODES.join("|"), "g"), "[код]");
 }
 
-/** Коды, которые уже нельзя выдавать: отмеченные в Redis и те, что уже стоят в опубликованных постах. */
+/** Коды, которые уже нельзя выдавать: снятая партия, отмеченные в Redis и те, что уже стоят в опубликованных постах. */
 export function spentAppStoreCodes(redisUsed: readonly string[], history: { project?: string; text?: string }[]): string[] {
-  const spent = new Set<string>();
+  const spent = new Set<string>(OLOID_APP_STORE_RETIRED_CODES);
   for (const raw of redisUsed) {
     const code = raw.trim().toUpperCase();
     if ((OLOID_APP_STORE_CODES as readonly string[]).includes(code)) spent.add(code);
@@ -159,9 +281,9 @@ export function spentAppStoreCodes(redisUsed: readonly string[], history: { proj
   return OLOID_APP_STORE_CODES.filter((c) => spent.has(c));
 }
 
-/** Следующий код в заданном порядке. null — раздача кончилась. */
+/** Следующий код в заданном порядке. Снятая партия не выдаётся. null — раздача кончилась. */
 export function nextAppStoreCode(spent: readonly string[]): string | null {
-  const used = new Set(spent);
+  const used = new Set<string>([...spent, ...OLOID_APP_STORE_RETIRED_CODES]);
   return OLOID_APP_STORE_CODES.find((c) => !used.has(c)) ?? null;
 }
 
@@ -566,8 +688,8 @@ export const PROJECTS: Project[] = [
       },
       // Раз в календарные сутки МСК (dailyRubric): не в общей очереди, weight 0.
       // Картинка — один баннер из appStorePictures (не кадр из pictures). Трейлер слот не съедает и остаётся видео.
-      // До конца OLOID_APP_STORE_PROMO_UNTIL и пока есть неиспользованные коды слот занимает appstore-promo.
-      // Дальше — эта рубрика, без кода.
+      // С OLOID_APP_STORE_PROMO_FROM по OLOID_APP_STORE_PROMO_UNTIL и пока есть неснятый код слот занимает appstore-promo.
+      // До окна, после окна и когда коды кончились — эта рубрика, без кода.
       {
         id: "appstore",
         weight: 0,
@@ -671,7 +793,8 @@ export const PROJECTS: Project[] = [
     ],
     alternateRubric: "trailer",
     alternateEveryDays: 3,
-    // Первый успешный пост «Олоида» за сутки МСК. Пока день не позже OLOID_APP_STORE_PROMO_UNTIL и есть коды — appstore-promo, иначе эта рубрика.
+    // Первый успешный пост «Олоида» за сутки МСК. В окне раздачи и пока есть неснятый код — appstore-promo, иначе эта рубрика.
+    // appstore-promo закрывает тот же день, что и эта рубрика: VK Play и провокация ждут его.
     // Отключить слот: удалить эту строку. Остановить только коды: сдвинуть OLOID_APP_STORE_PROMO_UNTIL, массив не очищать.
     dailyRubric: "appstore",
     // Второй пост суток: VK Play. Утро не занимает. До OLOID_VKPLAY_FROM не выбирается.
