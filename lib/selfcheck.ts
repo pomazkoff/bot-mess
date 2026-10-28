@@ -47,7 +47,16 @@ const banned = ["94", "TLENUM", "достижен", "secret", "нише", "ло�
 const blob = OLOID_DEV_NUMBER_FACTS.map((fact) => fact.text).join("\n");
 for (const word of banned) assert.equal(blob.includes(word), false, word);
 assert.equal(new Set(OLOID_DEV_NUMBER_FACTS.map((fact) => fact.id)).size, OLOID_DEV_NUMBER_FACTS.length);
-assert.ok(OLOID_DEV_NUMBER_FACTS.length > 0);
+assert.ok(OLOID_DEV_NUMBER_FACTS.length > 70);
+assert.ok(oloid.facts.some((fact) => fact.includes("прислонённый ломик")));
+assert.ok(oloid.facts.some((fact) => fact.includes("Сейф собран")));
+assert.ok(oloid.facts.some((fact) => fact.includes("Выборы эпизода I")));
+assert.ok(oloid.facts.some((fact) => fact.includes("199 ₽")));
+assert.equal(oloid.facts.some((fact) => fact.includes("500 ₽")), false);
+const sunday = OLOID_DEV_NUMBER_FACTS.find((fact) => fact.id === "commits-sunday");
+assert.ok(sunday);
+assert.equal(devNumberProblem("в воскресенье 209 коммитов из 666", sunday.text), null);
+assert.ok(devNumberProblem("209 коммитов и ещё 12", sunday.text));
 
 const pool = eligibleRotationRubrics(oloid);
 assert.deepEqual(
@@ -168,6 +177,7 @@ assert.ok(provocationLexiconProblem("вы идиоты"));
 assert.equal(pollOptionsProblem(["игра", "книга"]), null);
 assert.ok(provocationLexiconProblem("церковь\nдвор"));
 
+assert.equal(lowercaseSentenceStarts("Следак в титрах"), "Следак в титрах");
 assert.equal(lowercaseSentenceStarts("ИИ использовался как инструмент"), "ИИ использовался как инструмент");
 assert.equal(lowercaseSentenceStarts("ии использовался как инструмент"), "ИИ использовался как инструмент");
 assert.equal(rotationSafetyProblem("ИИ использовался как инструмент, и всё", "backstage"), null);
