@@ -112,9 +112,9 @@ export function vkPlayUrlBlocked(url = OLOID_VKPLAY_URL): boolean {
 // Площадки в запретах. В массиве проекта лежит формулировка «VK Play ещё не вышел»;
 // forbiddenFor подменяет её по дате и рубрике. Цена в тексте этой строки снимается отдельно для постов без цены.
 const OLOID_PLATFORM_FORBIDDEN =
-  "Не писать, что игра уже вышла на VK Play, Android или Steam. Дат этих площадок нет — не называй их. Цену называть только 500 ₽ (App Store, iOS); другие цены не выдумывать. Языки локализации не называть: их нет в фактах.";
+  "Не писать, что игра уже вышла на VK Play, Android или Steam. Дат этих площадок нет — не называй их. Цену называть только 199 ₽ (App Store, iOS); другие цены не выдумывать. Языки локализации не называть: их нет в фактах.";
 const OLOID_PLATFORM_FORBIDDEN_VK_OUT =
-  "Не писать, что игра уже вышла на Android или Steam. Дат этих площадок нет — не называй их. «Олоид» на VK Play уже вышел — это можно. Цену называть только 500 ₽ (App Store, iOS); другие цены не выдумывать. Языки локализации не называть: их нет в фактах.";
+  "Не писать, что игра уже вышла на Android или Steam. Дат этих площадок нет — не называй их. «Олоид» на VK Play уже вышел — это можно. Цену называть только 199 ₽ (App Store, iOS); другие цены не выдумывать. Языки локализации не называть: их нет в фактах.";
 const OLOID_APP_STORE_PLATFORM_FORBIDDEN =
   "Не пиши про VK Play. Не пиши, что игра уже вышла на Android или Steam, и не называй даты этих площадок. Не пиши «эксклюзив», «только в App Store», «только на iOS», «только на iPhone», «только для iPad», «iOS-only» и что на других платформах релиза не было. Цену не упоминать. Языки локализации не называть: их нет в фактах.";
 
@@ -477,7 +477,7 @@ export const PROJECTS: Project[] = [
       // Илья, 2026-10-20
       "Прохождение занимает около 2–3 часов.",
       "«Олоид» вышел на iOS в октябре 2026 года и доступен в App Store на iPhone и iPad.",
-      "Цена в App Store — 500 ₽.",
+      "Цена в App Store — 199 ₽.",
       OLOID_VKPLAY_SOON_FACT,
       "Android в разработке. Steam не решён, страница в Steam не опубликована.",
       "Визуальный ориентир — Disco Elysium.",
@@ -855,7 +855,7 @@ export function factsFor(p: Project, now = new Date(), rubricId?: string): strin
   return facts.filter((f) => !mentionsPrice(f));
 }
 
-/** Запреты для промпта. В рубриках без цены разрешение назвать 500 ₽ заменяется на «Цену не упоминать». */
+/** Запреты для промпта. В рубриках без цены разрешение назвать 199 ₽ заменяется на «Цену не упоминать». */
 export function forbiddenFor(p: Project, rubricId?: string, now = new Date()): string[] {
   let list = p.id === "oloid" ? p.forbidden.map((f) => (f === OLOID_PLATFORM_FORBIDDEN ? platformForbidden(rubricId, now) : f)) : p.forbidden;
   if (p.id === "oloid" && rubricId === OLOID_DEV_NUMBERS_RUBRIC) {
@@ -865,12 +865,12 @@ export function forbiddenFor(p: Project, rubricId?: string, now = new Date()): s
           "Языки локализации не называть: их нет в фактах.",
           "Языки локализации не называть, пока выбранный факт этого поста прямо не говорит, что игра на русском и английском. Другие языки не называть.",
         )
-        .replace(/Цену называть только 500 ₽ \(App Store, iOS\); другие цены не выдумывать\.\s*/u, "Цену не упоминать. "),
+        .replace(/Цену называть только 199 ₽ \(App Store, iOS\); другие цены не выдумывать\.\s*/u, "Цену не упоминать. "),
     );
   }
   if (!noPriceRubric(rubricId)) return list;
   return list.map((f) =>
-    f.replace(/Цену называть только 500 ₽ \(App Store, iOS\); другие цены не выдумывать\.\s*/u, "Цену не упоминать. "),
+    f.replace(/Цену называть только 199 ₽ \(App Store, iOS\); другие цены не выдумывать\.\s*/u, "Цену не упоминать. "),
   );
 }
 

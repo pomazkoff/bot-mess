@@ -99,7 +99,7 @@ assert.ok(voice);
 assert.equal(devNumberProblem("сейчас 839 файлов", voice.text), null);
 assert.ok(devNumberProblem("в игре 94 точки перехода", voice.text));
 assert.ok(devNumberProblem("прохождение 2–3 часа", voice.text));
-assert.ok(devNumberProblem("цена 500", voice.text));
+assert.ok(devNumberProblem("цена 199", voice.text));
 assert.ok(devNumberProblem("около 1600 реплик и 839 файлов", voice.text));
 assert.ok(devNumberProblem("просто про звук", voice.text));
 assert.deepEqual(numberTokens("версия 0.9.28 и 27,5"), ["0.9.28", "27.5"]);
@@ -231,7 +231,7 @@ assert.ok(provocation);
 assert.equal(provocation.weight, 0);
 assert.equal(oloid.thirdDailyRubric, "provocation");
 const provocationFacts = factsFor(oloid, slot1730, "provocation").join("\n");
-assert.equal(provocationFacts.includes("500 ₽"), false);
+assert.equal(provocationFacts.includes("199 ₽"), false);
 const hotText = `визуальные новеллы — это не игры? мы так не думаем.
 
 когда текста больше, чем кликов, спор в комментариях обычно интереснее вердикта.
@@ -252,7 +252,7 @@ assert.ok(ruleCheck(`${hotLinked}\n\nhttps://example.com`, oloid, slot1730, prov
 assert.equal(provocationNumberProblem("сейчас просто спор про жанр", provocationFacts), null);
 assert.equal(provocationNumberProblem("спор про Петербург 2018 года", provocationFacts), null);
 assert.ok(provocationNumberProblem("у нас 839 файлов озвучки", provocationFacts));
-assert.ok(provocationNumberProblem("цена 500 рублей", provocationFacts));
+assert.ok(provocationNumberProblem("цена 199 рублей", provocationFacts));
 assert.ok(provocationNumberProblem("прохождение 2–3 часа", provocationFacts));
 assert.ok(repeatedEnding(hotText, [{ project: "oloid", rubric: "provocation", text: hotText, at: slot1730.toISOString() }], "oloid"));
 assert.equal(
@@ -328,7 +328,7 @@ const promoText = `в наушниках коммуналка звучит бл�
 assert.equal(appStoreCodeProblem(promoText, "oloid", "appstore-promo", promoCode), null);
 assert.equal(appStorePriceProblem(promoText, "oloid", "appstore-promo"), null);
 assert.equal(appStoreMomentProblem(promoText, "oloid", "appstore-promo"), null);
-assert.ok(appStorePriceProblem(`${promoText}\n\nцена 500`, "oloid", "appstore-promo"));
+assert.ok(appStorePriceProblem(`${promoText}\n\nцена 199`, "oloid", "appstore-promo"));
 assert.ok(appStoreMomentProblem(`${promoText}\n\nэто эксклюзив App Store`, "oloid", "appstore-promo"));
 assert.equal(appStoreCodeProblem(`просто утро\n\n${promoCode}`, "oloid", "appstore"), `промокод ${promoCode} в этом посте не нужен — убери его`);
 
