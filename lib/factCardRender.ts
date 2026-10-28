@@ -27,7 +27,7 @@ import { getFactCardPng, saveFactCardPng } from "./store.js";
 const SIZE = FACT_CARD_SIZE;
 const YELLOW = "#F2C230";
 const TITLE_PX = 150;
-const LOGO_W = 200;
+const LOGO_W = 230;
 
 type FontBin = Buffer;
 
@@ -45,7 +45,7 @@ function fonts() {
   return fontsPromise;
 }
 
-/** Белая кисть с альфой. Прозрачные поля срезаем, ширина на карточке ~200 px. */
+/** Белая кисть «ОЛОИД». Прозрачные поля срезаем, ширина на карточке ~230 px. */
 function logoMark() {
   logoPromise ??= (async () => {
     const trimmed = await sharp(readFileSync(fileURLToPath(LOGO_URL))).trim({ threshold: 2 }).png().toBuffer();
