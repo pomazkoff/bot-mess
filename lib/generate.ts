@@ -38,6 +38,7 @@ export type DraftHints = {
   shownNote?: string; // карусель или ролик: описать видимое
   provocation?: boolean;
   formatNote?: string; // формат провокации: спор, сторона, непопулярное мнение, «а вы бы»
+  factCard?: boolean; // заголовок и подпись квадратной карточки на том же кадре
 };
 
 export async function draftPost(
@@ -53,7 +54,7 @@ export async function draftPost(
   detectiveHint?: string, // заданная мемная отсылка «Бюро» (стиль, не факт)
   promoCode?: string, // один код только этого поста; в систему и в другие рубрики не попадает
   hints?: DraftHints,
-): Promise<{ text: string; options?: string[] }> {
+): Promise<{ text: string; options?: string[]; card?: { title: string; caption: string } }> {
   // Код и redeem-ссылка — только у appstore-promo. В остальные рубрики код не попадает, даже если его передали.
   const code = rubric.id === OLOID_APP_STORE_PROMO_RUBRIC ? promoCode : undefined;
   const link = code ? oloidRedeemUrl(code) : (rubric.link ?? p.link)(now, linkContent);
@@ -66,7 +67,12 @@ export async function draftPost(
   const quiet = hints?.quiet === true;
   const wantPoll = hints?.wantPoll === true;
   const provocation = hints?.provocation === true;
-  const jsonShape = wantPoll ? '{"text": "текст поста", "options": ["вариант", "вариант"]}' : '{"text": "текст поста"}';
+  const factCard = hints?.factCard === true && !wantPoll;
+  const jsonShape = wantPoll
+    ? '{"text": "текст поста", "options": ["вариант", "вариант"]}'
+    : factCard
+      ? '{"text": "текст поста", "cardTitle": "два или три слова", "cardCaption": "подпись не длиннее 110 символов"}'
+      : '{"text": "текст поста"}';
 
   const system = `Ты пишешь посты для Threads от лица автора проекта «${p.name}». Пишешь по-русски.
 
@@ -104,6 +110,9 @@ ${hints?.dateSteer ? `Повод дня (одна обычная публика�
 ${hints?.devFact ? `ЕДИНСТВЕННЫЙ числовой факт этого поста. Другие числа из фактов проекта не копируй:\n• ${hints.devFact}` : ""}
 ${hints?.characterLine ? `Единственная допустимая реплика, дословно и в кавычках: ${hints.characterLine}` : ""}
 ${hints?.shownNote ? hints.shownNote : pictureNote ? `К посту будет приложена картинка из игры: ${pictureNote}. Можно опереться на одну её деталь; не описывай картинку целиком, не пиши «на картинке» и не добавляй того, чего на ней нет.` : ""}
+${factCard ? `К тому же кадру будет квадратная карточка. В JSON добавь cardTitle и cardCaption.
+cardTitle — 2 или 3 слова, имя этого факта, без точки, кавычек и цены.
+cardCaption — тот же факт, что в тексте поста, одна или две короткие фразы, не длиннее 110 символов. Без ссылки, без цены, без призыва скачать, без спойлера и без числа, которого нет в факте этого поста.` : ""}
 ${wantPoll ? (provocation
   ? "К посту будет опрос Threads: 2–4 варианта, каждый от 1 до 25 символов, без цифр, ссылок, цены, политики, религии и оскорблений. Варианты — короткие стороны спора, не факты об игре. В тексте задай вопрос и не перечисляй варианты списком."
   : "К посту будет опрос Threads: 2–4 варианта, каждый от 1 до 25 символов, без цифр, ссылок, цены и спойлеров. Варианты — короткие ответы читателя, не факты об игре. В тексте задай вопрос и не перечисляй варианты списком.") : ""}
@@ -117,7 +126,7 @@ ${recent || "(пока нет)"}
 ${oloidEndingHint(p.id, history)}
 ${feedback ? `\nПредыдущий вариант отклонён: ${feedback}. Исправь.` : ""}`;
 
-  const parsed = await askJson<{ text: string; options?: string[] }>(
+  const parsed = await askJson<{ text: string; options?: string[]; cardTitle?: string; cardCaption?: string }>(
     system,
     user,
     wantPoll
@@ -127,19 +136,27 @@ ${feedback ? `\nПредыдущий вариант отклонён: ${feedback
           required: ["text", "options"],
           additionalProperties: false,
         }
-      : {
-          type: "object",
-          properties: { text: { type: "string" } },
-          required: ["text"],
-          additionalProperties: false,
-        },
+      : factCard
+        ? {
+            type: "object",
+            properties: { text: { type: "string" }, cardTitle: { type: "string" }, cardCaption: { type: "string" } },
+            required: ["text", "cardTitle", "cardCaption"],
+            additionalProperties: false,
+          }
+        : {
+            type: "object",
+            properties: { text: { type: "string" } },
+            required: ["text"],
+            additionalProperties: false,
+          },
   );
   const trimmed = parsed.text.trim();
   // Формат — до ruleCheck: пустые строки входят в лимит 450.
   // Сначала вёрстка (края строк), потом строчные: заглавная должна стоять в начале строки, а не после пробелов.
   const text = p.id === "oloid" ? lowercaseSentenceStarts(normalizeOloidParagraphs(trimmed)) : trimmed;
   const options = wantPoll ? parsed.options?.map((option) => option.trim()).filter(Boolean) : undefined;
-  return { text, options };
+  const card = factCard ? { title: parsed.cardTitle ?? "", caption: parsed.cardCaption ?? "" } : undefined;
+  return { text, options, card };
 }
 
 // Строчный стиль «Олоида»: первая буква поста, строки и фразы — строчная.
@@ -486,6 +503,11 @@ function vkPlayFactNote(rubricId?: string): string {
   return "Это пост рубрики VK Play. Факт, не отклоняй: «Олоид» вышел на VK Play. Ссылку в конце не отклоняй: это страница игры на VK Play, UTM нет специально. «Олоид» — мистическая визуальная новелла, не хоррор: «хоррор», horror и «ужастик» отклоняй. Пожар, огонь, финал, концовки, скелет, убийц и кадр «олоид на ладони» отклоняй. Яркий момент из фактов и кадра можно. Цену не упоминать. Если в посте есть цена — отклоняй. Про ИИ допустима только фраза «ИИ использовался как инструмент»; другие формулировки про нейросети отклоняй. Промокоды отклоняй.\n";
 }
 
+function cardFactNote(card?: { title: string; caption: string }): string {
+  if (!card?.title && !card?.caption) return "";
+  return `К кадру приложена карточка. Заголовок: «${card.title}». Подпись: «${card.caption}». Это короткая выжимка того же факта, что в посте. Отклоняй спойлер, цену, штамп и утверждение, которого нет в фактах. Цены на карточке нет специально, даже если в фактах она есть: не требуй её. Число на карточке допустимо только из факта этого поста.\n`;
+}
+
 function rotationFactNote(rubricId?: string, devFact?: string, quiet?: boolean): string {
   if (!rubricId || !isOloidRotationRubric(rubricId)) return "";
   let note =
@@ -524,18 +546,18 @@ export async function factCheck(
   p: Project,
   pictureNote?: string,
   now = new Date(),
-  opts?: { rubricId?: string; promoCode?: string; devFact?: string; quiet?: boolean },
+  opts?: { rubricId?: string; promoCode?: string; devFact?: string; quiet?: boolean; card?: { title: string; caption: string } },
 ): Promise<string | null> {
   const r = await askJson<{ ok: boolean; reason: string }>(
     `Ты строгий редактор-фактчекер. Проверь пост о проекте «${p.name}».
-${p.id === "oloid" ? oloidCheckNote(opts?.rubricId, now) : ""}${rotationFactNote(opts?.rubricId, opts?.devFact, opts?.quiet)}${provocationFactNote(opts?.rubricId, opts?.quiet)}${appStoreFactNote(opts?.rubricId, opts?.promoCode)}${vkPlayFactNote(opts?.rubricId)}${p.id === "buro" ? `Отсылки к детективам — стиль и шутка, не факты о проекте. Допустимы только эти якоря, каждый своим героем:\n${BURO_DETECTIVE_REFS.map((ref) => `• ${ref.hint}`).join("\n")}\nНе отклоняй такую шутку, если она узнаваемая и не приписана чужому персонажу. Отклоняй, если пост утверждает, что сервис основан на фильме, снят по нему или связан с правообладателем, если цитата приписана не тому герою, если раскрыта развязка или описана жестокость, или если шутка непристойная.\n` : ""}Допустимые факты:
+${p.id === "oloid" ? oloidCheckNote(opts?.rubricId, now) : ""}${cardFactNote(opts?.card)}${rotationFactNote(opts?.rubricId, opts?.devFact, opts?.quiet)}${provocationFactNote(opts?.rubricId, opts?.quiet)}${appStoreFactNote(opts?.rubricId, opts?.promoCode)}${vkPlayFactNote(opts?.rubricId)}${p.id === "buro" ? `Отсылки к детективам — стиль и шутка, не факты о проекте. Допустимы только эти якоря, каждый своим героем:\n${BURO_DETECTIVE_REFS.map((ref) => `• ${ref.hint}`).join("\n")}\nНе отклоняй такую шутку, если она узнаваемая и не приписана чужому персонажу. Отклоняй, если пост утверждает, что сервис основан на фильме, снят по нему или связан с правообладателем, если цитата приписана не тому герою, если раскрыта развязка или описана жестокость, или если шутка непристойная.\n` : ""}Допустимые факты:
 ${factsFor(p, now, opts?.rubricId).map((f) => `• ${f}`).join("\n")}
 Запрещено:
 ${forbiddenFor(p, opts?.rubricId, now).map((f) => `• ${f}`).join("\n")}
 ${pictureNote ? `\nК посту приложена картинка из игры: ${pictureNote}. Детали, которые на ней видны, допустимы.\n` : ""}
 Отклоняй, если в посте есть утверждение о проекте, которого нет в фактах (цифры, даты, цены, отзывы, истории клиентов, прогресс разработки), спойлер, или пост звучит как спам. Художественные образы и ирония без фактических утверждений допустимы.
 Ответь JSON: {"ok": true, "reason": ""} или {"ok": false, "reason": "кратко что не так"}`,
-    text,
+    opts?.card ? `${text}\n\nКарточка — заголовок: ${opts.card.title}\nПодпись: ${opts.card.caption}` : text,
     {
       type: "object",
       properties: { ok: { type: "boolean" }, reason: { type: "string" } },

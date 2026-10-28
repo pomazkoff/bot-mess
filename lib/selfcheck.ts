@@ -4,6 +4,8 @@
 
 import assert from "node:assert/strict";
 import { OLOID_DEV_NUMBER_FACTS, OLOID_DEV_NUMBERS_RUBRIC, devNumberProblem, numberTokens } from "./devFacts.js";
+import { factCardCaptionLines, factCardEligible, factCardProblem, factCardPublicUrl, factCardTitleLines, mediaUsesPicture, pictureByBg } from "./factCard.js";
+import { assertFactCardPng, renderFactCard } from "./factCardRender.js";
 import { appStoreCodeProblem, appStoreMomentProblem, appStorePriceProblem, lowercaseSentenceStarts, provocationNumberProblem, repeatedEnding, ruleCheck } from "./generate.js";
 import {
   OLOID_DATE_HOOKS,
@@ -342,6 +344,74 @@ const dayIdx = cronSrc.indexOf("if (project.dailyRubric && appStoreSlot) await s
 assert.ok(dryIdx > 0 && publishIdx > dryIdx && dayIdx > publishIdx && markIdx > dayIdx);
 assert.equal(cronSrc.slice(0, publishIdx).includes("await markAppStoreCodeUsed"), false);
 assert.match(cronSrc, /const appStoreSlot = rubricId === OLOID_APP_STORE_RUBRIC \|\| rubricId === OLOID_APP_STORE_PROMO_RUBRIC/);
+
+const cardSrc = readFileSync(new URL("../api/card.ts", import.meta.url), "utf8");
+assert.equal(cardSrc.includes("CRON_SECRET"), false);
+assert.equal(cardSrc.includes("pictureByBg"), true);
+assert.match(cronSrc, /карточка не собралась \(/);
+assert.match(cronSrc, /в посте обычный кадр/);
+const resolveIdx = cronSrc.indexOf("await resolveCardMedia");
+assert.ok(resolveIdx > 0 && resolveIdx < publishIdx);
+assert.equal(previewSrc.includes("../lib/threads.js"), false);
+
+assert.equal(factCardEligible({ projectId: "oloid", rubricId: "backstage", picture: true, poll: false, shown: false, rubricMedia: false }), true);
+assert.equal(factCardEligible({ projectId: "oloid", rubricId: "dev-numbers", picture: true, poll: false, shown: false, rubricMedia: false }), true);
+assert.equal(factCardEligible({ projectId: "oloid", rubricId: "appstore", picture: true, poll: false, shown: false, rubricMedia: false }), false);
+assert.equal(factCardEligible({ projectId: "oloid", rubricId: "appstore-promo", picture: true, poll: false, shown: false, rubricMedia: false }), false);
+assert.equal(factCardEligible({ projectId: "oloid", rubricId: "vkplay", picture: true, poll: false, shown: false, rubricMedia: false }), false);
+assert.equal(factCardEligible({ projectId: "oloid", rubricId: "trailer", picture: false, poll: false, shown: false, rubricMedia: true }), false);
+assert.equal(factCardEligible({ projectId: "oloid", rubricId: "provocation", picture: true, poll: true, shown: false, rubricMedia: false }), false);
+assert.equal(factCardEligible({ projectId: "oloid", rubricId: "ask", picture: true, poll: true, shown: false, rubricMedia: false }), false);
+assert.equal(factCardEligible({ projectId: "oloid", rubricId: "backstage", picture: false, poll: false, shown: true, rubricMedia: false }), false);
+assert.equal(factCardEligible({ projectId: "buro", rubricId: "backstage", picture: true, poll: false, shown: false, rubricMedia: false }), false);
+
+const cardOk = { title: "Две плиты", caption: "На коммунальной кухне две газовые плиты, клеёнка и разговор, который заводится сам." };
+assert.equal(factCardProblem(cardOk, { required: true }), null);
+assert.equal(factCardProblem(cardOk, { required: false }), null);
+assert.ok(factCardProblem({ title: "Плиты", caption: cardOk.caption }, { required: true }));
+assert.ok(factCardProblem({ title: "Две плиты и ещё стол", caption: cardOk.caption }, { required: true }));
+assert.ok(factCardProblem({ title: cardOk.title, caption: "а".repeat(111) }, { required: true }));
+assert.ok(factCardProblem({ title: cardOk.title, caption: "это хоррор про кухню коммуналки и две плиты у окна" }, { required: true }));
+assert.ok(factCardProblem({ title: cardOk.title, caption: "скелет на кухне, две плиты и клеёнка, и разговор сам заводится" }, { required: true }));
+assert.ok(factCardProblem({ title: "Цена игры", caption: "В App Store игра стоит 500 рублей, и это вся цена." }, { required: true }));
+assert.ok(factCardProblem({ title: cardOk.title, caption: "калейдоскоп плит на коммунальной кухне, клеёнка и разговор" }, { required: true, stopList: oloid.stopList }));
+assert.ok(factCardProblem({ title: cardOk.title, caption: "скачай и поиграй на кухне с двумя плитами" }, { required: true, quiet: true }));
+assert.equal(factCardProblem({ title: "839 файлов", caption: "Озвучки набралось 839 файлов: Егор, Вера, Алик и остальные роли." }, { required: true, devFact: voice.text }), null);
+assert.ok(factCardProblem({ title: "1600 реплик", caption: "В игре около 1600 реплик и 839 файлов озвучки." }, { required: true, devFact: voice.text }));
+assert.deepEqual(factCardTitleLines("Семейное древо"), ["СЕМЕЙНОЕ", "ДРЕВО"]);
+assert.deepEqual(factCardTitleLines("Две плиты"), ["ДВЕ ПЛИТЫ"]);
+assert.equal(factCardCaptionLines(cardOk.caption).length <= 2, true);
+
+const kitchen = oloid.pictures?.find((picture) => picture.url.endsWith("/oloid/kitchen.jpg"));
+assert.ok(kitchen);
+const cardUrl = factCardPublicUrl(kitchen.url, cardOk.title, cardOk.caption);
+assert.equal(mediaUsesPicture(cardUrl, kitchen.url), true);
+assert.equal(mediaUsesPicture(kitchen.url, kitchen.url), true);
+assert.equal(pictureByBg("oloid/appstore/01_kommunalka_v2.jpg"), undefined);
+assert.equal(pictureByBg("oloid/../secrets.jpg"), undefined);
+const detail = oloid.rubrics.find((rubric) => rubric.id === "detail");
+assert.ok(detail);
+const again = pickPicture(oloid, detail, "кухня клеёнка", [{ project: "oloid", rubric: "detail", text: "x", at: evening.toISOString(), media: cardUrl }]);
+assert.notEqual(again?.url, kitchen.url);
+
+assert.equal(existsSync("lib/fonts/Jost-300-Light.ttf"), true);
+assert.equal(existsSync("lib/fonts/Jost-600-Semi.ttf"), true);
+const rendered = await renderFactCard({ pictureUrl: kitchen.url, title: cardOk.title, caption: cardOk.caption });
+assertFactCardPng(rendered);
+const { data, info } = await (await import("sharp")).default(rendered).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+let gold = 0;
+for (let i = 0; i < data.length; i += info.channels) {
+  const r = data[i];
+  const g = data[i + 1];
+  const b = data[i + 2];
+  if (r > 230 && g > 170 && g < 215 && b > 30 && b < 75 && g - b > 110) gold++;
+}
+assert.ok(gold > 500, `жёлтый заголовок не нарисован (${gold})`);
+for (const file of ["docs/cards/yard.png", "docs/cards/kitchen.png", "docs/cards/voice.png"]) {
+  assert.equal(existsSync(file), true, file);
+  const sample = readFileSync(file);
+  assertFactCardPng(sample);
+}
 
 console.log("selfcheck ok");
 console.log("--- sample backstage (not model) ---\n" + backstageText);

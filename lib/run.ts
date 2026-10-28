@@ -1,4 +1,5 @@
 import { OLOID_DEV_NUMBER_FACTS, OLOID_DEV_NUMBERS_RUBRIC } from "./devFacts.js";
+import { factCardEligible, factCardProblem, mediaUsesPicture, normalizeCaption, normalizeTitle, type FactCardCopy } from "./factCard.js";
 import { appStoreCodeProblem, appStoreMomentProblem, appStorePriceProblem, detectiveRefProblem, draftPost, repeatedEnding, ruleCheck, tooSimilar, vkPlayProblem, factCheck } from "./generate.js";
 import {
   OLOID_ASK_RUBRIC,
@@ -56,6 +57,10 @@ export type Draft = {
   provocationFormat?: string;
   /** Сколько провокаций уже вышло до этой. Чётные — опрос, нечётные — ссылка. */
   provocationCount?: number;
+  /** Заголовок и подпись карточки. Только обычный пост и пост цифр с одним кадром. */
+  card?: FactCardCopy;
+  /** Кадр из pictures, на котором собирается карточка. В историю при карточке всё равно пишется её адрес. */
+  pictureUrl?: string;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -230,15 +235,16 @@ export function pickPicture(project: Project, rubric: Rubric, topic: string | un
   const pics = appStore ? project.appStorePictures : vkPlay ? project.vkPlayPictures : project.pictures;
   if (!rubric.withPicture || !pics?.length) return undefined;
   const own = history.filter((h) => h.project === project.id);
-  const recent = new Set(own.slice(0, 20).map((h) => h.media));
-  const fresh = pics.filter((p) => !recent.has(p.url));
+  // Адрес карточки /api/card тоже считается этим кадром: очередь скриншотов не сбрасывается.
+  const seen = (url: string) => own.slice(0, 20).some((h) => mediaUsesPicture(h.media, url));
+  const fresh = pics.filter((p) => !seen(p.url));
   const pool = fresh.length ? fresh : pics;
   const text = `${rubric.id} ${topic ?? ""}`.toLowerCase();
   const score = (p: Picture) => p.tags.filter((t) => text.includes(t)).length;
   const best = Math.max(...pool.map(score));
   const matched = best > 0 ? pool.filter((p) => score(p) === best) : pool;
   const age = (url: string) => {
-    const i = own.findIndex((h) => h.media === url);
+    const i = own.findIndex((h) => mediaUsesPicture(h.media, url));
     return i === -1 ? Number.POSITIVE_INFINITY : i;
   };
   const oldest = Math.max(...matched.map((p) => age(p.url)));
@@ -445,6 +451,14 @@ export async function makeDraft(opts: {
       : null;
   const picture = rubric.media || wantPoll || shown ? undefined : pickPicture(project, rubric, topic, history);
   const media: Media | undefined = rubric.media ?? shown?.media ?? (picture && { type: "IMAGE", url: picture.url });
+  const factCard = factCardEligible({
+    projectId: project.id,
+    rubricId: rubric.id,
+    picture: Boolean(picture),
+    poll: wantPoll,
+    shown: Boolean(shown),
+    rubricMedia: Boolean(rubric.media),
+  });
   const detective = project.id === "buro" ? pickDetectiveRef(history, project.forceNextRef) : undefined;
   const promoCode = promoCodeForRubric(rubric.id, nextCode, promoScheduled, forcedRubric);
   const promoLeft = promoCode ? OLOID_APP_STORE_CODES.length - spent.length - 1 : undefined;
@@ -465,6 +479,7 @@ export async function makeDraft(opts: {
     mediaId: shown?.id,
     provocationFormat: provocationFormat?.id,
     provocationCount,
+    pictureUrl: picture?.url,
   };
 
   if (rubric.id === OLOID_APP_STORE_PROMO_RUBRIC && !promoCode) {
@@ -484,13 +499,16 @@ export async function makeDraft(opts: {
     shownNote: shown?.note,
     provocation,
     formatNote: provocationFormat?.steer,
+    factCard,
   };
 
   for (let i = 0; i < MAX_ATTEMPTS; i++) {
     const drafted = await draftPost(project, rubric, history, now, feedback, topic, channel.voiceNote, linkContent, picture?.about, detective?.hint, promoCode, hints);
     const candidate = drafted.text;
+    const card = factCard ? { title: normalizeTitle(drafted.card?.title ?? ""), caption: normalizeCaption(drafted.card?.caption ?? "") } : undefined;
     const problem =
       ruleCheck(candidate, project, now, rubric, linkContent, promoCode, quiet, devFact?.text) ??
+      factCardProblem(card, { required: factCard, devFact: devFact?.text, stopList: project.stopList, quiet }) ??
       appStoreCodeProblem(candidate, project.id, rubric.id, promoCode) ??
       appStorePriceProblem(candidate, project.id, rubric.id) ??
       appStoreMomentProblem(candidate, project.id, rubric.id) ??
@@ -498,10 +516,10 @@ export async function makeDraft(opts: {
       (detective ? detectiveRefProblem(candidate, history, detective) : null) ??
       repeatedEnding(candidate, history, project.id) ??
       tooSimilar(candidate, history) ??
-      (await factCheck(candidate, project, shown?.note ?? picture?.about, now, { rubricId: rubric.id, promoCode, devFact: devFact?.text, quiet }));
+      (await factCheck(candidate, project, shown?.note ?? picture?.about, now, { rubricId: rubric.id, promoCode, devFact: devFact?.text, quiet, card }));
     if (problem) {
       feedback = problem;
-      rejected.push(`${problem}: ${candidate}`);
+      rejected.push(`${problem}: ${candidate}${card ? ` [карточка: ${card.title} | ${card.caption}]` : ""}`);
       continue;
     }
     const pollLexicon = wantPoll && provocation && drafted.options ? provocationLexiconProblem(drafted.options.join("\n")) : null;
@@ -513,7 +531,7 @@ export async function makeDraft(opts: {
     }
     const poll = wantPoll && !pollErr && drafted.options ? toPollAttachment(drafted.options) : undefined;
     if (pollErr) rejected.push(`опрос снят, пост без опроса: ${pollErr}: ${candidate}`);
-    return { ...base, text: candidate, poll, rejected };
+    return { ...base, text: candidate, poll, card, rejected };
   }
   return { ...base, text: null, rejected };
 }
