@@ -1,4 +1,4 @@
-// Сборка карточки 1080×1080: кадр на весь квадрат, затемнение сверху и снизу, слово «ОЛОИД», жёлтый заголовок, белая подпись.
+// Сборка карточки 1080×1080: кадр на весь квадрат, затемнение сверху и снизу, логотип-кисть, жёлтый заголовок, белая подпись.
 // satori рисует текст шрифтом Jost (кириллица в комплекте), sharp обрезает кадр и складывает слои.
 // Ошибка рендера не должна ронять слот: вызывающий публикует обычный кадр и пишет об этом в Telegram.
 
@@ -26,21 +26,37 @@ import { getFactCardPng, saveFactCardPng } from "./store.js";
 
 const SIZE = FACT_CARD_SIZE;
 const YELLOW = "#F2C230";
+const TITLE_PX = 150;
+const LOGO_W = 200;
 
 type FontBin = Buffer;
 
-let fontsPromise: Promise<{ light: FontBin; semi: FontBin }> | null = null;
+let fontsPromise: Promise<{ light: FontBin }> | null = null;
+let logoPromise: Promise<{ src: string; width: number; height: number }> | null = null;
 
-// Путь литералом: так файл шрифта попадает в бандл функции на Vercel.
+// Пути литералом: так шрифт и логотип попадают в бандл функции на Vercel.
 const JOST_LIGHT_URL = new URL("./fonts/Jost-300-Light.ttf", import.meta.url);
-const JOST_SEMI_URL = new URL("./fonts/Jost-600-Semi.ttf", import.meta.url);
+const LOGO_URL = new URL("./brand/oloid-logo.png", import.meta.url);
 
 function fonts() {
   fontsPromise ??= Promise.resolve({
     light: readFileSync(fileURLToPath(JOST_LIGHT_URL)),
-    semi: readFileSync(fileURLToPath(JOST_SEMI_URL)),
   });
   return fontsPromise;
+}
+
+/** Белая кисть с альфой. Прозрачные поля срезаем, ширина на карточке ~200 px. */
+function logoMark() {
+  logoPromise ??= (async () => {
+    const trimmed = await sharp(readFileSync(fileURLToPath(LOGO_URL))).trim({ threshold: 2 }).png().toBuffer();
+    const meta = await sharp(trimmed).metadata();
+    const width = meta.width ?? LOGO_W;
+    const height = meta.height ?? LOGO_W;
+    const drawH = Math.max(1, Math.round((LOGO_W * height) / width));
+    const sized = await sharp(trimmed).resize({ width: LOGO_W, height: drawH, fit: "fill" }).png().toBuffer();
+    return { src: `data:image/png;base64,${sized.toString("base64")}`, width: LOGO_W, height: drawH };
+  })();
+  return logoPromise;
 }
 
 function localPicturePath(pictureUrl: string): string | null {
@@ -70,15 +86,11 @@ function box(style: Record<string, string | number>, children?: unknown): Node {
 
 function titleSize(lines: string[]): number {
   const longest = Math.max(...lines.map((line) => [...line].length));
-  // Jost-капс шире оценки 0.72: длинная строка не должна упираться в край кадра.
-  const maxW = lines.length > 1 ? 860 : 900;
-  let size = lines.length > 1 ? 108 : 116;
-  while (size > 60) {
-    const width = longest * size * 0.78 + Math.max(0, longest - 1) * size * 0.03;
-    if (width <= maxW) break;
-    size -= 2;
-  }
-  return size;
+  // Короткая строка — 150 px: «ДВЕ ПЛИТЫ» на этом кегле помещается. Длинную уменьшаем, чтобы осталась одна строка.
+  if (longest <= 12) return TITLE_PX;
+  const maxW = 940;
+  const unit = 0.74;
+  return Math.max(72, Math.floor(maxW / (longest * unit)));
 }
 
 function captionSize(lines: string[]): number {
@@ -90,18 +102,19 @@ function captionSize(lines: string[]): number {
 }
 
 function titleLine(text: string, fontSize: number): Node {
-  const face = {
-    display: "flex",
-    fontFamily: "Jost",
-    fontWeight: 600,
-    fontSize,
-    letterSpacing: "0.03em",
-    lineHeight: 1,
-  };
-  return box({ position: "relative" }, [
-    box({ ...face, position: "absolute", top: 4, left: 1, color: "rgba(12,8,0,0.78)" }, text),
-    box({ ...face, color: YELLOW }, text),
-  ]);
+  return box(
+    {
+      color: YELLOW,
+      fontFamily: "Jost",
+      fontWeight: 300,
+      fontSize,
+      letterSpacing: "0.02em",
+      lineHeight: 0.92,
+      whiteSpace: "nowrap",
+      textShadow: "0px 6px 18px rgba(0,0,0,0.55)",
+    },
+    text,
+  );
 }
 
 // Затемнение отдельно от текста: у satori абсолютные слои оказываются поверх букв и гасят белый.
@@ -114,18 +127,18 @@ function gradientSvg(): Buffer {
       <stop offset="100%" stop-color="#000" stop-opacity="0"/>
     </linearGradient>
     <linearGradient id="bot" x1="0" y1="1" x2="0" y2="0">
-      <stop offset="0%" stop-color="#000" stop-opacity="0.78"/>
-      <stop offset="28%" stop-color="#000" stop-opacity="0.5"/>
-      <stop offset="58%" stop-color="#000" stop-opacity="0.16"/>
+      <stop offset="0%" stop-color="#000" stop-opacity="0.92"/>
+      <stop offset="14%" stop-color="#000" stop-opacity="0.8"/>
+      <stop offset="34%" stop-color="#000" stop-opacity="0.46"/>
       <stop offset="100%" stop-color="#000" stop-opacity="0"/>
     </linearGradient>
   </defs>
   <rect x="0" y="0" width="${SIZE}" height="280" fill="url(#top)"/>
-  <rect x="0" y="${SIZE - 620}" width="${SIZE}" height="620" fill="url(#bot)"/>
+  <rect x="0" y="${SIZE - 700}" width="${SIZE}" height="700" fill="url(#bot)"/>
 </svg>`);
 }
 
-function overlayTree(title: string, caption: string): Node {
+function overlayTree(title: string, caption: string, logo: { src: string; width: number; height: number }): Node {
   const lines = factCardTitleLines(title);
   const capLines = factCardCaptionLines(caption);
   const tSize = titleSize(lines);
@@ -151,18 +164,15 @@ function overlayTree(title: string, caption: string): Node {
           paddingRight: 64,
         },
         [
-          box(
-            {
-              color: "#ffffff",
-              fontFamily: "Jost",
-              fontWeight: 600,
-              fontSize: 72,
-              letterSpacing: "0.22em",
-              lineHeight: 1,
-              marginRight: -16,
+          {
+            type: "img",
+            props: {
+              src: logo.src,
+              width: logo.width,
+              height: logo.height,
+              style: { width: logo.width, height: logo.height },
             },
-            "ОЛОИД",
-          ),
+          },
           box(
             {
               color: "rgba(255,255,255,0.94)",
@@ -178,8 +188,8 @@ function overlayTree(title: string, caption: string): Node {
           ),
           box({ flex: 1 }),
           box(
-            { flexDirection: "column", alignItems: "center" },
-            lines.map((line, i) => box({ marginTop: i === 0 ? 0 : 8 }, titleLine(line, tSize))),
+            { flexDirection: "column", alignItems: "center", width: "100%" },
+            lines.map((line, i) => box({ marginTop: i === 0 ? 0 : 4, justifyContent: "center", width: "100%" }, titleLine(line, tSize))),
           ),
           box(
             { flexDirection: "column", alignItems: "center", marginTop: 36, width: "100%" },
@@ -207,14 +217,11 @@ function overlayTree(title: string, caption: string): Node {
 }
 
 async function renderOverlay(title: string, caption: string): Promise<Buffer> {
-  const face = await fonts();
-  const svg = await satori(overlayTree(normalizeTitle(title), normalizeCaption(caption)) as never, {
+  const [face, logo] = await Promise.all([fonts(), logoMark()]);
+  const svg = await satori(overlayTree(normalizeTitle(title), normalizeCaption(caption), logo) as never, {
     width: SIZE,
     height: SIZE,
-    fonts: [
-      { name: "Jost", data: face.light, weight: 300, style: "normal" },
-      { name: "Jost", data: face.semi, weight: 600, style: "normal" },
-    ],
+    fonts: [{ name: "Jost", data: face.light, weight: 300, style: "normal" }],
   });
   const png = new Resvg(svg, {
     fitTo: { mode: "width", value: SIZE },

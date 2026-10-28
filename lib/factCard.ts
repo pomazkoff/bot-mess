@@ -1,6 +1,6 @@
 // Квадратная карточка факта «Олоида»: текст, проверки и публичный адрес.
 // Рендер — в lib/factCardRender.ts, чтобы крон «Бюро» не тянул sharp, пока карточка не нужна.
-// Логотипа-файла в репозитории нет, на oloid-game.ru слово «Олоид» — текст Jost. На карточке то же слово, набранное.
+// Логотип — кисть из lib/brand/oloid-logo.png. Заголовок — тонкий Jost, плоский жёлтый #F2C230.
 
 import { createHash } from "node:crypto";
 import { devNumberProblem } from "./devFacts.js";

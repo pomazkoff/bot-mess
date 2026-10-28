@@ -395,7 +395,7 @@ const again = pickPicture(oloid, detail, "кухня клеёнка", [{ project
 assert.notEqual(again?.url, kitchen.url);
 
 assert.equal(existsSync("lib/fonts/Jost-300-Light.ttf"), true);
-assert.equal(existsSync("lib/fonts/Jost-600-Semi.ttf"), true);
+assert.equal(existsSync("lib/brand/oloid-logo.png"), true);
 const rendered = await renderFactCard({ pictureUrl: kitchen.url, title: cardOk.title, caption: cardOk.caption });
 assertFactCardPng(rendered);
 const { data, info } = await (await import("sharp")).default(rendered).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
