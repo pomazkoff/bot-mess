@@ -42,7 +42,6 @@ export type HistoryItem = {
   pollOptions?: string[];
   dateHook?: string; // id повода из календаря обычных постов
   devFactId?: string; // id факта рубрики «цифры разработки»
-  factIds?: string[]; // хвост фактов, который был в промпте этого поста
   lineId?: string; // id реплики рубрики «реплика дня»
   mediaId?: string; // id карусели или ролика обычного поста
   provocationFormat?: string; // id формата рубрики provocation
@@ -200,7 +199,6 @@ export async function releaseScheduledClaim(id: string): Promise<void> {
 // Очередь обычных постов «Олоида». Пишется только после успешной публикации.
 const rubricUsedKey = (projectId: string) => `threads:rubric_used:${projectId}`;
 const devFactUsedKey = (projectId: string) => `threads:dev_fact_used:${projectId}`;
-const factUsedKey = (projectId: string) => `threads:fact_used:${projectId}`;
 const lineUsedKey = (projectId: string) => `threads:line_used:${projectId}`;
 const regularCountKey = (projectId: string) => `threads:regular_count:${projectId}`;
 const dateHookKey = (projectId: string) => `threads:date_hook:${projectId}`;
@@ -210,8 +208,6 @@ const mediaUsedKey = (projectId: string) => `threads:media_used:${projectId}`;
 export type OloidRotationState = {
   rubricUsed: Record<string, string>;
   devFactUsed: Record<string, string>;
-  /** id факта хвоста → ISO-время последнего поста, где он был в промпте. */
-  factUsed: Record<string, string>;
   lineUsed: Record<string, string>;
   regularCount: number | null;
   /** id повода → дата МСК, когда он уже вышел. */
@@ -224,10 +220,9 @@ export type OloidRotationState = {
 
 export async function getOloidRotationState(projectId: string): Promise<OloidRotationState> {
   const c = await db();
-  const [rubricUsed, devFactUsed, factUsed, lineUsed, regularRaw, dateHooks, askPoll, mediaUsed] = await Promise.all([
+  const [rubricUsed, devFactUsed, lineUsed, regularRaw, dateHooks, askPoll, mediaUsed] = await Promise.all([
     c.hGetAll(rubricUsedKey(projectId)),
     c.hGetAll(devFactUsedKey(projectId)),
-    c.hGetAll(factUsedKey(projectId)),
     c.hGetAll(lineUsedKey(projectId)),
     c.get(regularCountKey(projectId)),
     c.hGetAll(dateHookKey(projectId)),
@@ -238,7 +233,6 @@ export async function getOloidRotationState(projectId: string): Promise<OloidRot
   return {
     rubricUsed,
     devFactUsed,
-    factUsed,
     lineUsed,
     regularCount: regularCount != null && Number.isFinite(regularCount) ? regularCount : null,
     dateHooks,
@@ -272,12 +266,4 @@ export async function saveOloidRotation(
   if (patch.mediaId) ops.push(c.hSet(mediaUsedKey(projectId), patch.mediaId, patch.at));
   if (patch.askPoll != null) ops.push(c.set(askPollKey(projectId), patch.askPoll ? "1" : "0"));
   await Promise.all(ops);
-}
-
-/** Хвост фактов поста. Пишется только после успешной публикации, все id одной меткой. */
-export async function saveOloidFacts(projectId: string, factIds: readonly string[], at: string): Promise<void> {
-  if (!factIds.length) return;
-  const fields: Record<string, string> = {};
-  for (const id of factIds) fields[id] = at;
-  await (await db()).hSet(factUsedKey(projectId), fields);
 }

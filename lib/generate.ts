@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { OLOID_DEV_NUMBERS_RUBRIC, devNumberProblem, numberTokens } from "./devFacts.js";
+import { oloidColorSteer, oloidPromptFacts, recentDetailNote, spatulaProblem } from "./oloidFacts.js";
 import { isOloidRotationRubric, provocationProblem, quietProblem, rotationSafetyProblem } from "./oloidRotation.js";
 import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, factsFor, forbiddenFor, mentionsPrice, mskCalendarDay, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_VKPLAY_FROM, OLOID_VKPLAY_RUBRIC, oloidRedeemUrl, promoActive, redactAppStoreCodes, type DetectiveRef, type Project, type Rubric } from "./projects.js";
 import type { HistoryItem } from "./store.js";
@@ -33,7 +34,6 @@ export type DraftHints = {
   toneNote?: string;
   dateSteer?: string;
   devFact?: string; // единственный числовой факт рубрики dev-numbers
-  factLines?: string[]; // паспорт и выборка хвоста; без поля — весь паспорт, как раньше
   wantPoll?: boolean;
   characterLine?: string;
   shownNote?: string; // карусель или ролик: описать видимое
@@ -69,14 +69,15 @@ export async function draftPost(
   const provocation = hints?.provocation === true;
   const jsonShape = wantPoll ? '{"text": "текст поста", "options": ["вариант", "вариант"]}' : '{"text": "текст поста"}';
 
-  const factLines = hints?.factLines ?? factsFor(p, now, rubric.id);
+  const passport = factsFor(p, now, rubric.id);
+  const factPack = p.id === "oloid" ? oloidPromptFacts(passport, history, now, { rubricId: rubric.id }) : null;
   const system = `Ты пишешь посты для Threads от лица автора проекта «${p.name}». Пишешь по-русски.
 
 ГОЛОС:
 ${p.voice}
 ${voiceNote ? `\nАККАУНТ:\n${voiceNote}\n` : ""}
 ФАКТЫ (единственный допустимый источник утверждений о проекте):
-${factLines.map((f) => `• ${f}`).join("\n")}
+${(factPack?.facts ?? passport).map((f) => `• ${f}`).join("\n")}
 
 ЗАПРЕЩЕНО:
 ${forbiddenFor(p, rubric.id, now).map((f) => `• ${f}`).join("\n")}
@@ -100,15 +101,16 @@ ${jsonShape}`;
 
   const user = `Рубрика: ${rubric.brief}
 ${topic ? `Тема поста: ${topic}` : ""}
+${factPack ? oloidColorSteer(factPack.color, rubric.id) : ""}${factPack ? recentDetailNote(history) : ""}
 ${hints?.formatNote ? `Формат этого поста: ${hints.formatNote}` : ""}
 ${hints?.toneNote ? `Тон слота: ${hints.toneNote}` : ""}
 ${hints?.dateSteer ? `Повод дня (одна обычная публикация, без новых фактов): ${hints.dateSteer}` : ""}
 ${hints?.devFact ? `ЕДИНСТВЕННЫЙ числовой факт этого поста. Другие числа из фактов проекта не копируй:\n• ${hints.devFact}` : ""}
 ${hints?.characterLine ? `Единственная допустимая реплика, дословно и в кавычках: ${hints.characterLine}` : ""}
-${hints?.shownNote ? hints.shownNote : pictureNote ? `К посту будет приложена картинка из игры: ${pictureNote}. Можно опереться на одну её деталь; не описывай картинку целиком, не пиши «на картинке» и не добавляй того, чего на ней нет.` : ""}
+${hints?.shownNote ? `${hints.shownNote} Если в кадре есть деталь из списка недавних — не называй её, опиши другую видимую.` : pictureNote ? `К посту будет приложена картинка из игры: ${pictureNote}. Можно опереться на одну её деталь, если её нет в списке недавних деталей. Не описывай картинку целиком, не пиши «на картинке» и не добавляй того, чего на ней нет.` : ""}
 ${wantPoll ? (provocation
-  ? "К посту будет опрос Threads: 2–4 варианта, каждый от 1 до 25 символов, без цифр, ссылок, цены, политики, религии и оскорблений. Варианты — короткие стороны спора, не факты об игре. В тексте задай вопрос и не перечисляй варианты списком."
-  : "К посту будет опрос Threads: 2–4 варианта, каждый от 1 до 25 символов, без цифр, ссылок, цены и спойлеров. Варианты — короткие ответы читателя, не факты об игре. В тексте задай вопрос и не перечисляй варианты списком.") : ""}
+  ? "К посту будет опрос Threads: 2–4 варианта, каждый от 1 до 25 символов и не длиннее 25 байт UTF-8 (кириллица — два байта, держи вариант короче 13 букв), без цифр, ссылок, цены, политики, религии и оскорблений. Варианты — короткие стороны спора, не факты об игре. В тексте задай вопрос и не перечисляй варианты списком."
+  : "К посту будет опрос Threads: 2–4 варианта, каждый от 1 до 25 символов и не длиннее 25 байт UTF-8 (кириллица — два байта, держи вариант короче 13 букв), без цифр, ссылок, цены и спойлеров. Варианты — короткие ответы читателя, не факты об игре. В тексте задай вопрос и не перечисляй варианты списком.") : ""}
 ${linkLine}
 ${code ? `Единственный код этого поста — вставь отдельной строкой ровно так, без изменений: ${code}\nЭто одноразовая бесплатная загрузка в App Store: код вводят там же, забирает первый. Других кодов нет и выдумывать их нельзя. Код оставь и в тексте отдельной строкой, без ссылки вокруг: его копируют вручную. Коротко скажи, что нажатие на ссылку само подставит код в App Store. Призыв в конце своими словами: скачать, поиграть и оставить отзыв. Фразу «скачай — поиграй — оставь отзыв» не копируй. Цену не упоминать.` : ""}
 ${season ? `Сезонный повод (по желанию): ${season}` : ""}
@@ -228,9 +230,12 @@ export function ruleCheck(
   promoCode?: string,
   quiet = false,
   devFact?: string,
-  allowedFacts?: string,
 ): string | null {
   if (!text) return "пустой текст";
+  if (p.id === "oloid") {
+    const tool = spatulaProblem(text);
+    if (tool) return tool;
+  }
   if (text.length > MAX_LEN) return `длина ${text.length} > ${MAX_LEN}`;
   if ((text.match(EMOJI) || []).length > 1) return "больше одного эмодзи";
   for (const re of BANNED) if (re.test(text)) return `запрещённый паттерн ${re}`;
@@ -240,7 +245,7 @@ export function ruleCheck(
   }
   for (const re of p.stopList ?? []) if (re.test(text)) return `штамп ${re} — перепиши фразу целиком, не синонимом`;
   if (rubric?.id === OLOID_PROVOCATION_RUBRIC) {
-    const provocationIssue = provocationProblem(text) ?? provocationNumberProblem(text, allowedFacts ?? factsFor(p, now, rubric.id).join("\n"));
+    const provocationIssue = provocationProblem(text) ?? provocationNumberProblem(text, factsFor(p, now, rubric.id).join("\n"));
     if (provocationIssue) return provocationIssue;
   }
   if (rubric) {
@@ -504,7 +509,7 @@ function oloidCheckNote(rubricId?: string, now = new Date()): string {
   const style =
     "Строчные буквы (кроме имён собственных), один восклицательный знак в первой строке и короткие абзацы (одна-две связанные фразы на строке, не больше трёх; между абзацами пустая строка; ссылка отдельной строкой после пустой) — заданный стиль, не отклоняй из-за этого.\nСсылка на apps.apple.com/ru/app/id6817809325 — официальная страница «Олоида» в App Store. Если она стоит в посте, не отклоняй из-за неё: UTM нет специально. ";
   if (rubricId === OLOID_DEV_NUMBERS_RUBRIC) {
-    return `${style}Это пост «цифры разработки». Цену не упоминать. Числа, которых нет в отдельном выбранном факте, отклоняй — в том числе 500 ₽, 2–3 часа, около 1600 реплик и 45 статей, даже если они есть в общих фактах.\n`;
+    return `${style}Это пост «цифры разработки». Цену не упоминать. Числа, которых нет в отдельном выбранном факте, отклоняй — в том числе 199 ₽, 2–3 часа, около 1600 реплик и 45 статей, даже если они есть в общих фактах.\n`;
   }
   if (rubricId === OLOID_VKPLAY_RUBRIC) {
     return `${style}«Вышло на VK Play» — факт этого поста, не отклоняй. Выход на Android или Steam — нет. Цену не упоминать. Если в посте есть цена — отклоняй.\n`;
@@ -519,7 +524,7 @@ function oloidCheckNote(rubricId?: string, now = new Date()): string {
     mskCalendarDay(now) >= OLOID_VKPLAY_FROM
       ? "«Вышло на VK Play» допустимо: это факт. "
       : "Выход на VK Play — нет. ";
-  return `${style}«Вышло на iOS / iPhone / iPad», «App Store» и цена 500 ₽ допустимы, когда они есть в фактах. ${vkLine}Выход на Android или Steam — нет.\n`;
+  return `${style}«Вышло на iOS / iPhone / iPad», «App Store» и цена 199 ₽ допустимы, когда они есть в фактах. ${vkLine}Выход на Android или Steam — нет.\n`;
 }
 
 export async function factCheck(
@@ -527,12 +532,12 @@ export async function factCheck(
   p: Project,
   pictureNote?: string,
   now = new Date(),
-  opts?: { rubricId?: string; promoCode?: string; devFact?: string; quiet?: boolean; factLines?: string[] },
+  opts?: { rubricId?: string; promoCode?: string; devFact?: string; quiet?: boolean },
 ): Promise<string | null> {
   const r = await askJson<{ ok: boolean; reason: string }>(
     `Ты строгий редактор-фактчекер. Проверь пост о проекте «${p.name}».
 ${p.id === "oloid" ? oloidCheckNote(opts?.rubricId, now) : ""}${rotationFactNote(opts?.rubricId, opts?.devFact, opts?.quiet)}${provocationFactNote(opts?.rubricId, opts?.quiet)}${appStoreFactNote(opts?.rubricId, opts?.promoCode)}${vkPlayFactNote(opts?.rubricId)}${p.id === "buro" ? `Отсылки к детективам — стиль и шутка, не факты о проекте. Допустимы только эти якоря, каждый своим героем:\n${BURO_DETECTIVE_REFS.map((ref) => `• ${ref.hint}`).join("\n")}\nНе отклоняй такую шутку, если она узнаваемая и не приписана чужому персонажу. Отклоняй, если пост утверждает, что сервис основан на фильме, снят по нему или связан с правообладателем, если цитата приписана не тому герою, если раскрыта развязка или описана жестокость, или если шутка непристойная.\n` : ""}Допустимые факты:
-${(opts?.factLines ?? factsFor(p, now, opts?.rubricId)).map((f) => `• ${f}`).join("\n")}
+${factsFor(p, now, opts?.rubricId).map((f) => `• ${f}`).join("\n")}
 Запрещено:
 ${forbiddenFor(p, opts?.rubricId, now).map((f) => `• ${f}`).join("\n")}
 ${pictureNote ? `\nК посту приложена картинка из игры: ${pictureNote}. Детали, которые на ней видны, допустимы.\n` : ""}

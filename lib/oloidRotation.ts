@@ -154,26 +154,6 @@ export function pickLeastRecent<T extends { id: string }>(
   return best;
 }
 
-/** Несколько самых давно не использованных. Ничья — порядок списка. */
-export function pickLeastRecentMany<T extends { id: string }>(
-  items: readonly T[],
-  lastUsed: Readonly<Record<string, string | undefined>>,
-  count: number,
-): T[] {
-  if (count <= 0 || !items.length) return [];
-  const stamp = (id: string) => {
-    const raw = lastUsed[id];
-    if (!raw) return 0;
-    const at = Date.parse(raw);
-    return Number.isNaN(at) ? 0 : at;
-  };
-  return items
-    .map((item, index) => ({ item, index, at: stamp(item.id) }))
-    .sort((a, b) => a.at - b.at || a.index - b.index)
-    .slice(0, Math.min(count, items.length))
-    .map((row) => row.item);
-}
-
 /** Redis побеждает, если метка новее. События из истории дописывают дыры. */
 export function mergeLastUsed(
   redis: Readonly<Record<string, string | undefined>>,
@@ -312,16 +292,30 @@ export function provocationProblem(text: string): string | null {
   );
 }
 
-/** 2–4 варианта, каждый 1–25 символов. Без чисел: опрос не источник фактов. */
+const POLL_OPTION_MAX = 25;
+
+/**
+ * Документация Threads (Polls, 13.10.2026): 1–25 символов.
+ * Лимит текста поста Meta считает в байтах UTF-8. Кириллица — два байта,
+ * поэтому вариант из 13–25 русских букв (26–50 байт) контейнер с опросом отвергает.
+ * Режем и по символам, и по байтам: так вариант проходит при любом из двух подсчётов.
+ */
+function pollOptionTooLong(option: string): boolean {
+  return [...option].length > POLL_OPTION_MAX || new TextEncoder().encode(option).length > POLL_OPTION_MAX;
+}
+
+/** 2–4 варианта, каждый 1–25 символов и не длиннее 25 байт UTF-8. Без чисел: опрос не источник фактов. */
 export function pollOptionsProblem(options: readonly string[] | undefined): string | null {
   if (!options || options.length < 2 || options.length > 4) return "опрос: нужно 2–4 варианта";
   const cleaned = options.map((option) => option.trim());
-  if (cleaned.some((option) => option.length < 1 || [...option].length > 25)) return "опрос: каждый вариант от 1 до 25 символов";
+  if (cleaned.some((option) => option.length < 1 || pollOptionTooLong(option))) {
+    return "опрос: каждый вариант от 1 до 25 символов и не длиннее 25 байт UTF-8";
+  }
   if (cleaned.some((option) => /[\r\n]/.test(option))) return "опрос: вариант в одну строку";
   if (new Set(cleaned.map((option) => option.toLowerCase())).size !== cleaned.length) return "опрос: варианты повторяются";
   const blob = cleaned.join("\n");
-  if (/https?:|\d|₽|хоррор|horror|пожар|финал|скелет|нейросет|(?<![\p{L}])ии(?![\p{L}])/iu.test(blob)) {
-    return "опрос: варианты без чисел, ссылок, цены и спойлеров";
+  if (/https?:|\d|₽|хоррор|horror|пожар|финал|скелет|шпател|нейросет|(?<![\p{L}])ии(?![\p{L}])/iu.test(blob)) {
+    return "опрос: варианты без чисел, ссылок, цены, спойлеров и шпателя";
   }
   return null;
 }

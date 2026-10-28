@@ -1,5 +1,6 @@
 import { OLOID_DEV_NUMBER_FACTS, OLOID_DEV_NUMBERS_RUBRIC } from "./devFacts.js";
 import { appStoreCodeProblem, appStoreMomentProblem, appStorePriceProblem, detectiveRefProblem, draftPost, repeatedEnding, ruleCheck, tooSimilar, vkPlayProblem, factCheck } from "./generate.js";
+import { oloidRepeatProblem, spatulaProblem, topicRepeatsRecent } from "./oloidFacts.js";
 import {
   OLOID_ASK_RUBRIC,
   OLOID_LINE_RUBRIC,
@@ -12,7 +13,6 @@ import {
   oloidSlotTone,
   pickCharacterLine,
   pickLeastRecent,
-  pickLeastRecentMany,
   pollOptionsProblem,
   provocationHasLink,
   provocationLexiconProblem,
@@ -25,7 +25,7 @@ import {
   type PollAttachment,
   type SlotTone,
 } from "./oloidRotation.js";
-import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, factsForPrompt, mskCalendarDay, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_FROM, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RUBRIC, OLOID_FACT_SAMPLE, OLOID_POOL_FACTS, OLOID_PROVOCATION_RUBRIC, OLOID_PROVOCATION_SLOT_HOUR_MSK, OLOID_PROVOCATION_SLOT_UNTIL_HOUR_MSK, OLOID_VKPLAY_RUBRIC, OLOID_VKPLAY_SKIP_REASON, OLOID_VKPLAY_SLOT_HOUR_MSK, PROJECTS, pickWeighted, spentAppStoreCodes, vkPlayUrlBlocked, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
+import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, mskCalendarDay, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_FROM, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_PROVOCATION_SLOT_HOUR_MSK, OLOID_PROVOCATION_SLOT_UNTIL_HOUR_MSK, OLOID_VKPLAY_RUBRIC, OLOID_VKPLAY_SKIP_REASON, OLOID_VKPLAY_SLOT_HOUR_MSK, PROJECTS, pickWeighted, spentAppStoreCodes, vkPlayUrlBlocked, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
 import type { HistoryItem } from "./store.js";
 import type { Channel } from "./channels.js";
 import { pickRegularShown } from "./variety.js";
@@ -47,8 +47,6 @@ export type Draft = {
   poll?: PollAttachment;
   dateHook?: string;
   devFactId?: string;
-  /** Хвост фактов, который ушёл в промпт. В Redis — после успешной публикации. */
-  factIds?: string[];
   lineId?: string;
   tone?: SlotTone;
   /** Сколько обычных постов уже вышло до этого. Тихий — каждый третий. */
@@ -293,11 +291,14 @@ function forcedRefIfPending(history: HistoryItem[], forceNextRef?: string): Dete
 }
 
 /** Тема рубрики, которой не было в недавних постах этой рубрики; когда темы кончились — круг заново. */
-export function pickTopic(rubric: Rubric, history: HistoryItem[]): string | undefined {
+export function pickTopic(rubric: Rubric, history: HistoryItem[], blocked?: (topic: string) => boolean): string | undefined {
   if (!rubric.topics?.length) return undefined;
   const used = new Set(history.filter((h) => h.rubric === rubric.id).map((h) => h.topic));
   const fresh = rubric.topics.filter((t) => !used.has(t));
-  const pool = fresh.length ? fresh : rubric.topics;
+  const open = (list: string[]) => (blocked ? list.filter((topic) => !blocked(topic)) : list);
+  const freshOpen = open(fresh);
+  const anyOpen = open(rubric.topics);
+  const pool = freshOpen.length ? freshOpen : anyOpen.length ? anyOpen : fresh.length ? fresh : rubric.topics;
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
@@ -334,7 +335,6 @@ export async function makeDraft(opts: {
   /** Очередь обычных рубрик «Олоида». null у счётчика — считаем по истории. */
   rubricUsed?: Record<string, string>;
   devFactUsed?: Record<string, string>;
-  factUsed?: Record<string, string>;
   lineUsed?: Record<string, string>;
   regularCount?: number | null;
   dateHooks?: Record<string, string>;
@@ -357,7 +357,6 @@ export async function makeDraft(opts: {
     usedAppStoreCodes = null,
     rubricUsed = {},
     devFactUsed = {},
-    factUsed = {},
     lineUsed = {},
     regularCount: storedRegularCount = null,
     dateHooks = {},
@@ -387,7 +386,8 @@ export async function makeDraft(opts: {
     preferRegular: dateHookDue != null,
   }, provocationDoneDate);
   const wanted = forcedTopic?.toLowerCase();
-  let topic = (wanted && rubric.topics?.find((t) => t.toLowerCase().includes(wanted))) || pickTopic(rubric, history);
+  const blockTopic = project.id === "oloid" ? (item: string) => topicRepeatsRecent(item, projectHistory, now) : undefined;
+  let topic = (wanted && rubric.topics?.find((t) => t.toLowerCase().includes(wanted))) || pickTopic(rubric, history, blockTopic);
   let linkContent = `${channel.id}-${rubric.id}`;
   const topicTag = pickTopicTag(project, rubric, history);
   const regularCount = storedRegularCount ?? countRegularPosts(projectHistory);
@@ -453,19 +453,6 @@ export async function makeDraft(opts: {
   const detective = project.id === "buro" ? pickDetectiveRef(history, project.forceNextRef) : undefined;
   const promoCode = promoCodeForRubric(rubric.id, nextCode, promoScheduled, forcedRubric);
   const promoLeft = promoCode ? OLOID_APP_STORE_CODES.length - spent.length - 1 : undefined;
-  const pool =
-    project.id === "oloid" && rubric.id !== OLOID_DEV_NUMBERS_RUBRIC
-      ? pickLeastRecentMany(
-          OLOID_POOL_FACTS,
-          mergeLastUsed(
-            factUsed,
-            projectHistory.flatMap((item) => (item.factIds ?? []).map((id) => ({ id, at: item.at }))),
-          ),
-          OLOID_FACT_SAMPLE,
-        )
-      : [];
-  const factIds = pool.map((fact) => fact.id);
-  const factLines = factsForPrompt(project, now, rubric.id, factIds);
   const base = {
     project,
     rubricId: rubric.id,
@@ -477,7 +464,6 @@ export async function makeDraft(opts: {
     quiet,
     dateHook: dateHook?.id,
     devFactId: devFact?.id,
-    factIds: factIds.length ? factIds : undefined,
     lineId: line?.id,
     tone,
     regularCount,
@@ -498,7 +484,6 @@ export async function makeDraft(opts: {
     toneNote: tone ? toneNoteForRubric(tone, rubric.id) : undefined,
     dateSteer: dateHook?.steer,
     devFact: devFact?.text,
-    factLines,
     wantPoll,
     characterLine: line ? `${line.speaker}: «${line.line}». ${line.note}` : undefined,
     shownNote: shown?.note,
@@ -509,8 +494,10 @@ export async function makeDraft(opts: {
   for (let i = 0; i < MAX_ATTEMPTS; i++) {
     const drafted = await draftPost(project, rubric, history, now, feedback, topic, channel.voiceNote, linkContent, picture?.about, detective?.hint, promoCode, hints);
     const candidate = drafted.text;
+    const withOptions = [candidate, ...(drafted.options ?? [])].join("\n");
     const problem =
-      ruleCheck(candidate, project, now, rubric, linkContent, promoCode, quiet, devFact?.text, factLines.join("\n")) ??
+      ruleCheck(candidate, project, now, rubric, linkContent, promoCode, quiet, devFact?.text) ??
+      (project.id === "oloid" ? spatulaProblem(withOptions) : null) ??
       appStoreCodeProblem(candidate, project.id, rubric.id, promoCode) ??
       appStorePriceProblem(candidate, project.id, rubric.id) ??
       appStoreMomentProblem(candidate, project.id, rubric.id) ??
@@ -518,7 +505,8 @@ export async function makeDraft(opts: {
       (detective ? detectiveRefProblem(candidate, history, detective) : null) ??
       repeatedEnding(candidate, history, project.id) ??
       tooSimilar(candidate, history) ??
-      (await factCheck(candidate, project, shown?.note ?? picture?.about, now, { rubricId: rubric.id, promoCode, devFact: devFact?.text, quiet, factLines }));
+      (project.id === "oloid" ? oloidRepeatProblem(withOptions, history, now) : null) ??
+      (await factCheck(candidate, project, shown?.note ?? picture?.about, now, { rubricId: rubric.id, promoCode, devFact: devFact?.text, quiet }));
     if (problem) {
       feedback = problem;
       rejected.push(`${problem}: ${candidate}`);
