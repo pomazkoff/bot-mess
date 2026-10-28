@@ -164,19 +164,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Опрос, если API его не принял, снимается внутри publishPost: пост выходит текстом.
     let used = media;
     let pollDropped = false;
+    let pollError: string | undefined;
+    const takePublished = (published: { id: string; pollDropped?: boolean; pollError?: string }) => {
+      pollDropped = Boolean(published.pollDropped);
+      pollError = published.pollError;
+      return published.id;
+    };
     const postId = await publishPost(channel, text, topicTag, media, poll)
-      .then((published) => {
-        pollDropped = Boolean(published.pollDropped);
-        return published.id;
-      })
+      .then(takePublished)
       .catch(async (e) => {
         // Картинка не прошла — постим текст. Если контейнер уже опубликован, второй пост не создаём.
         if ((!media?.droppable && media?.type !== "IMAGE") || postAlreadyPublished(e)) throw e;
         await notify(`⚠️ ${where}: медиа не прошло (${e?.message ?? e}), публикую пост без него.`);
         used = undefined;
-        const again = await publishPost(channel, text, topicTag, undefined, poll);
-        pollDropped = Boolean(again.pollDropped);
-        return again.id;
+        return takePublished(await publishPost(channel, text, topicTag, undefined, poll));
       });
     // День и код закрываем сразу после публикации, до истории: сбой записи в ленту не должен выдать код ещё раз.
     const appStoreSlot = rubricId === OLOID_APP_STORE_RUBRIC || rubricId === OLOID_APP_STORE_PROMO_RUBRIC;
@@ -226,7 +227,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const marks = [
       quiet ? "без ссылки" : "",
       pollOptions?.length ? "с опросом" : "",
-      pollDropped ? "опрос не принят, вышел текст" : "",
+      pollDropped ? `опрос не принят, вышел текст${pollError ? `: ${pollError}` : ""}` : "",
       dateHook ? `повод ${dateHook}` : "",
       devFactId ? `факт ${devFactId}` : "",
       provocationFormat ? `формат ${provocationFormat}` : "",
@@ -234,7 +235,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ].filter(Boolean);
     const mediaNote = !used ? "" : used.type === "CAROUSEL" ? ", с каруселью" : used.type === "VIDEO" ? ", с видео" : ", с картинкой";
     await notify(`✅ Опубликовано (${where}, ${rubricId}${mediaNote}${marks.length ? `, ${marks.join(", ")}` : ""}):${topic ? `\nТема: ${topic}` : ""}${topicTag ? `\nТема Threads: ${topicTag}` : ""}${promoLine}\n\n${text}`);
-    return res.json({ posted: true, channel: channel.id, project: project.id, rubric: rubricId, topic, media: used?.type === "CAROUSEL" ? used.urls : used?.url, mediaId: used ? mediaId : undefined, promoCode, promoLeft, quiet, poll: pollOptions, pollDropped, dateHook, devFactId, provocationFormat, tone, postId, text });
+    return res.json({ posted: true, channel: channel.id, project: project.id, rubric: rubricId, topic, media: used?.type === "CAROUSEL" ? used.urls : used?.url, mediaId: used ? mediaId : undefined, promoCode, promoLeft, quiet, poll: pollOptions, pollDropped, pollError, dateHook, devFactId, provocationFormat, tone, postId, text });
   } catch (e: any) {
     console.error(e);
     await notify(`❌ Threads-бот упал (${channel.name}): ${e?.message ?? e}`);

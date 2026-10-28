@@ -292,16 +292,30 @@ export function provocationProblem(text: string): string | null {
   );
 }
 
-/** 2–4 варианта, каждый 1–25 символов. Без чисел: опрос не источник фактов. */
+const POLL_OPTION_MAX = 25;
+
+/**
+ * Документация Threads (Polls, 13.10.2026): 1–25 символов.
+ * Лимит текста поста Meta считает в байтах UTF-8. Кириллица — два байта,
+ * поэтому вариант из 13–25 русских букв (26–50 байт) контейнер с опросом отвергает.
+ * Режем и по символам, и по байтам: так вариант проходит при любом из двух подсчётов.
+ */
+function pollOptionTooLong(option: string): boolean {
+  return [...option].length > POLL_OPTION_MAX || new TextEncoder().encode(option).length > POLL_OPTION_MAX;
+}
+
+/** 2–4 варианта, каждый 1–25 символов и не длиннее 25 байт UTF-8. Без чисел: опрос не источник фактов. */
 export function pollOptionsProblem(options: readonly string[] | undefined): string | null {
   if (!options || options.length < 2 || options.length > 4) return "опрос: нужно 2–4 варианта";
   const cleaned = options.map((option) => option.trim());
-  if (cleaned.some((option) => option.length < 1 || [...option].length > 25)) return "опрос: каждый вариант от 1 до 25 символов";
+  if (cleaned.some((option) => option.length < 1 || pollOptionTooLong(option))) {
+    return "опрос: каждый вариант от 1 до 25 символов и не длиннее 25 байт UTF-8";
+  }
   if (cleaned.some((option) => /[\r\n]/.test(option))) return "опрос: вариант в одну строку";
   if (new Set(cleaned.map((option) => option.toLowerCase())).size !== cleaned.length) return "опрос: варианты повторяются";
   const blob = cleaned.join("\n");
-  if (/https?:|\d|₽|хоррор|horror|пожар|финал|скелет|нейросет|(?<![\p{L}])ии(?![\p{L}])/iu.test(blob)) {
-    return "опрос: варианты без чисел, ссылок, цены и спойлеров";
+  if (/https?:|\d|₽|хоррор|horror|пожар|финал|скелет|шпател|нейросет|(?<![\p{L}])ии(?![\p{L}])/iu.test(blob)) {
+    return "опрос: варианты без чисел, ссылок, цены, спойлеров и шпателя";
   }
   return null;
 }

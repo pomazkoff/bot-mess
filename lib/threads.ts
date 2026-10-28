@@ -3,9 +3,12 @@ import type { Media } from "./projects.js";
 import type { Channel } from "./channels.js";
 import type { PollAttachment } from "./oloidRotation.js";
 
-// Опрос Threads (документация Meta, июль 2026): только текстовый пост, поле poll_attachment.
-// 2–4 варианта, ключи option_a…option_d, каждый 1–25 символов. Картинка к опросу не клеится.
-// Если контейнер с опросом не создался — публикуем тот же текст без опроса.
+// Опрос Threads (документация Meta, Polls, 13.10.2026): только текстовый пост, поле poll_attachment.
+// JSON: option_a и option_b обязательны, option_c и option_d по желанию. 2–4 варианта.
+// Каждый вариант — 1–25 символов и не длиннее 25 байт UTF-8. Отдельного scope нет: threads_basic и threads_content_publish.
+// topic_tag в документации не запрещён рядом с опросом. Если вместе не приняли — повтор без темы,
+// опрос снимаем только когда запрос с poll_attachment тоже упал, и сохраняем текст этой ошибки.
+// Картинка к опросу не клеится. Если контейнер с опросом не создался — тот же текст без опроса.
 
 const API = "https://graph.threads.net/v1.0";
 const USER = process.env.THREADS_USER_ID || "me";
@@ -56,6 +59,25 @@ function isRetryablePublishError(e: unknown): boolean {
   return msg.includes("does not exist") || msg.includes("not available");
 }
 
+function threadsErrorDetail(json: any, status: number): string {
+  const err = json?.error;
+  if (!err || typeof err !== "object") return String(status);
+  const message = String(err.message || status).trim();
+  const user = typeof err.error_user_msg === "string" ? err.error_user_msg.trim() : "";
+  const code = err.code != null ? `#${err.code}` : "";
+  const sub = err.error_subcode != null ? `/${err.error_subcode}` : "";
+  const bits = [message];
+  if (user && user !== message) bits.push(user);
+  if (code) bits.push(`(${code}${sub})`);
+  return bits.join(" ").replace(/\s+/g, " ").trim();
+}
+
+/** Короткий текст ошибки Threads для Telegram и JSON крона. */
+export function briefThreadsError(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e ?? "");
+  return raw.replace(/\s+/g, " ").trim().slice(0, 220);
+}
+
 async function call(method: "GET" | "POST", path: string, params: Record<string, string>) {
   const body = new URLSearchParams(params);
   const res = await fetch(method === "GET" ? `${API}${path}?${body}` : `${API}${path}`, {
@@ -64,7 +86,7 @@ async function call(method: "GET" | "POST", path: string, params: Record<string,
   });
   const json: any = await res.json().catch(() => ({}));
   if (!res.ok || json.error) {
-    throw new Error(`Threads ${path}: ${json.error?.message || res.status}`);
+    throw new Error(`Threads ${path}: ${threadsErrorDetail(json, res.status)}`);
   }
   return json;
 }
@@ -198,13 +220,64 @@ export async function ensureFreshToken(ch: Channel): Promise<string> {
   return t.value;
 }
 
-export type PublishedPost = { id: string; pollDropped?: boolean };
+export type PublishedPost = { id: string; pollDropped?: boolean; pollError?: string };
 
-function pollField(poll: PollAttachment): string {
+/** Тело poll_attachment, как в документации: JSON с option_a…option_d. */
+export function pollAttachmentField(poll: PollAttachment): string {
   const body: Record<string, string> = { option_a: poll.option_a, option_b: poll.option_b };
   if (poll.option_c) body.option_c = poll.option_c;
   if (poll.option_d) body.option_d = poll.option_d;
   return JSON.stringify(body);
+}
+
+type ContainerStep = { extra: Record<string, string>; dropsPoll: boolean; note: string };
+
+/** Сначала полный запрос. Опрос снимаем только после неудачи запроса, где он ещё был. */
+export function containerSteps(topicTag?: string, attachment?: string): ContainerStep[] {
+  const withTopic = (extra: Record<string, string>): Record<string, string> => (topicTag ? { ...extra, topic_tag: topicTag } : extra);
+  const withPoll = (extra: Record<string, string>): Record<string, string> =>
+    attachment ? { ...extra, poll_attachment: attachment } : extra;
+  const steps: ContainerStep[] = [{ extra: withTopic(withPoll({})), dropsPoll: false, note: "полный" }];
+  if (attachment && topicTag) {
+    steps.push({ extra: withPoll({}), dropsPoll: false, note: "без topic_tag" });
+    steps.push({ extra: withTopic({}), dropsPoll: true, note: "без опроса" });
+    steps.push({ extra: {}, dropsPoll: true, note: "без опроса и topic_tag" });
+  } else if (topicTag) {
+    steps.push({ extra: {}, dropsPoll: false, note: "без topic_tag" });
+  } else if (attachment) {
+    steps.push({ extra: {}, dropsPoll: true, note: "без опроса" });
+  }
+  return steps;
+}
+
+async function createTextContainer(
+  create: (params: Record<string, string>) => Promise<any>,
+  base: Record<string, string>,
+  topicTag?: string,
+  attachment?: string,
+): Promise<{ container: any; pollDropped: boolean; pollError?: string }> {
+  const steps = containerSteps(topicTag, attachment);
+  let pollError: string | undefined;
+  let last: unknown;
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    try {
+      const container = await create({ ...base, ...step.extra });
+      if (!container?.id) throw new Error("Threads threads: нет id");
+      return {
+        container,
+        pollDropped: step.dropsPoll,
+        pollError: step.dropsPoll ? pollError : undefined,
+      };
+    } catch (e) {
+      last = e;
+      const message = briefThreadsError(e);
+      console.warn(`Контейнер (${step.note}) не создался:`, message);
+      if (attachment && "poll_attachment" in step.extra) pollError = message;
+      if (i === steps.length - 1) break;
+    }
+  }
+  throw last instanceof Error ? last : new Error("Threads threads: контейнер не создался");
 }
 
 async function createCarouselContainer(token: string, urls: string[], text: string, topicTag?: string): Promise<string> {
@@ -257,42 +330,20 @@ export async function publishPost(
 
   // Опрос только у текста. Картинка и опрос вместе API не принимает — опрос снимаем до запроса.
   let pollDropped = false;
-  let attachment = poll && !media ? pollField(poll) : undefined;
+  const attachment = poll && !media ? pollAttachmentField(poll) : undefined;
   if (poll && media) {
     console.warn("Опрос снят: Threads принимает poll_attachment только у текстового поста");
     pollDropped = true;
   }
 
   const create = (params: Record<string, string>) => call("POST", `/${USER}/threads`, params);
-
-  let container: any;
-  try {
-    container = await create(topicTag ? { ...base, ...(attachment ? { poll_attachment: attachment } : {}), topic_tag: topicTag } : attachment ? { ...base, poll_attachment: attachment } : base);
-  } catch (e) {
-    if (topicTag) {
-      console.warn("Повтор без topic_tag:", e);
-      try {
-        container = await create(attachment ? { ...base, poll_attachment: attachment } : base);
-      } catch (e2) {
-        if (!attachment) throw e2;
-        console.warn("Повтор без опроса:", e2);
-        pollDropped = true;
-        attachment = undefined;
-        container = await create(base);
-      }
-    } else if (attachment) {
-      console.warn("Повтор без опроса:", e);
-      pollDropped = true;
-      attachment = undefined;
-      container = await create(base);
-    } else {
-      throw e;
-    }
-  }
+  const created = await createTextContainer(create, base, topicTag, attachment);
+  pollDropped = pollDropped || created.pollDropped;
 
   // Текст ждём до ~60 с (опрос каждые 2–3 с): сбой GET и IN_PROGRESS — ещё не готово.
   // Срок вышел — публикуем всё равно. Медиа — до 3 минут, без FINISHED не публикуем.
   // threads_publish при «ещё не доехало» и 5xx повторяем до 4 раз; если id уже есть — стоп.
-  const id = await publishReady(container.id, token, text, Boolean(media));
-  return pollDropped ? { id, pollDropped: true } : { id };
+  const id = await publishReady(created.container.id, token, text, Boolean(media));
+  if (!pollDropped) return { id };
+  return created.pollError ? { id, pollDropped: true, pollError: created.pollError } : { id, pollDropped: true };
 }
