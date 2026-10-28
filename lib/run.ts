@@ -1,6 +1,7 @@
 import { OLOID_DEV_NUMBER_FACTS, OLOID_DEV_NUMBERS_RUBRIC } from "./devFacts.js";
 import { factCardEligible, factCardProblem, mediaUsesPicture, normalizeCaption, normalizeTitle, type FactCardCopy } from "./factCard.js";
 import { appStoreCodeProblem, appStoreMomentProblem, appStorePriceProblem, detectiveRefProblem, draftPost, repeatedEnding, ruleCheck, tooSimilar, vkPlayProblem, factCheck } from "./generate.js";
+import { oloidRepeatProblem, spatulaProblem, topicRepeatsRecent } from "./oloidFacts.js";
 import {
   OLOID_ASK_RUBRIC,
   OLOID_LINE_RUBRIC,
@@ -296,11 +297,14 @@ function forcedRefIfPending(history: HistoryItem[], forceNextRef?: string): Dete
 }
 
 /** Тема рубрики, которой не было в недавних постах этой рубрики; когда темы кончились — круг заново. */
-export function pickTopic(rubric: Rubric, history: HistoryItem[]): string | undefined {
+export function pickTopic(rubric: Rubric, history: HistoryItem[], blocked?: (topic: string) => boolean): string | undefined {
   if (!rubric.topics?.length) return undefined;
   const used = new Set(history.filter((h) => h.rubric === rubric.id).map((h) => h.topic));
   const fresh = rubric.topics.filter((t) => !used.has(t));
-  const pool = fresh.length ? fresh : rubric.topics;
+  const open = (list: string[]) => (blocked ? list.filter((topic) => !blocked(topic)) : list);
+  const freshOpen = open(fresh);
+  const anyOpen = open(rubric.topics);
+  const pool = freshOpen.length ? freshOpen : anyOpen.length ? anyOpen : fresh.length ? fresh : rubric.topics;
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
@@ -388,7 +392,8 @@ export async function makeDraft(opts: {
     preferRegular: dateHookDue != null,
   }, provocationDoneDate);
   const wanted = forcedTopic?.toLowerCase();
-  let topic = (wanted && rubric.topics?.find((t) => t.toLowerCase().includes(wanted))) || pickTopic(rubric, history);
+  const blockTopic = project.id === "oloid" ? (item: string) => topicRepeatsRecent(item, projectHistory, now) : undefined;
+  let topic = (wanted && rubric.topics?.find((t) => t.toLowerCase().includes(wanted))) || pickTopic(rubric, history, blockTopic);
   let linkContent = `${channel.id}-${rubric.id}`;
   const topicTag = pickTopicTag(project, rubric, history);
   const regularCount = storedRegularCount ?? countRegularPosts(projectHistory);
@@ -506,8 +511,10 @@ export async function makeDraft(opts: {
     const drafted = await draftPost(project, rubric, history, now, feedback, topic, channel.voiceNote, linkContent, picture?.about, detective?.hint, promoCode, hints);
     const candidate = drafted.text;
     const card = factCard ? { title: normalizeTitle(drafted.card?.title ?? ""), caption: normalizeCaption(drafted.card?.caption ?? "") } : undefined;
+    const withOptions = [candidate, ...(drafted.options ?? []), card?.title, card?.caption].filter((part): part is string => Boolean(part)).join("\n");
     const problem =
       ruleCheck(candidate, project, now, rubric, linkContent, promoCode, quiet, devFact?.text) ??
+      (project.id === "oloid" ? spatulaProblem(withOptions) : null) ??
       factCardProblem(card, { required: factCard, devFact: devFact?.text, stopList: project.stopList, quiet }) ??
       appStoreCodeProblem(candidate, project.id, rubric.id, promoCode) ??
       appStorePriceProblem(candidate, project.id, rubric.id) ??
@@ -516,6 +523,7 @@ export async function makeDraft(opts: {
       (detective ? detectiveRefProblem(candidate, history, detective) : null) ??
       repeatedEnding(candidate, history, project.id) ??
       tooSimilar(candidate, history) ??
+      (project.id === "oloid" ? oloidRepeatProblem(withOptions, history, now) : null) ??
       (await factCheck(candidate, project, shown?.note ?? picture?.about, now, { rubricId: rubric.id, promoCode, devFact: devFact?.text, quiet, card }));
     if (problem) {
       feedback = problem;

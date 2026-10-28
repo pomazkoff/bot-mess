@@ -4,6 +4,7 @@
 
 import { createHash } from "node:crypto";
 import { devNumberProblem } from "./devFacts.js";
+import { spatulaProblem } from "./oloidFacts.js";
 import { isOloidRotationRubric, oloidContentSafetyProblem, quietProblem } from "./oloidRotation.js";
 import { OLOID_APP_STORE_CODES, PROJECTS, mentionsPrice, type Picture } from "./projects.js";
 
@@ -139,6 +140,8 @@ export function factCardProblem(
   const safety = oloidContentSafetyProblem(blob);
   if (safety) return `карточка: ${safety}`;
   if (CARD_SPOILER.test(blob)) return "карточка: спойлер";
+  const spatula = spatulaProblem(blob);
+  if (spatula) return `карточка: ${spatula}`;
   if (mentionsPrice(blob)) return "карточка: цену не упоминать";
   for (const re of ctx.stopList ?? []) if (re.test(blob)) return `карточка: штамп ${re}`;
   if (ctx.quiet) {

@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { OLOID_DEV_NUMBERS_RUBRIC, devNumberProblem, numberTokens } from "./devFacts.js";
+import { oloidColorSteer, oloidPromptFacts, recentDetailNote, spatulaProblem } from "./oloidFacts.js";
 import { isOloidRotationRubric, provocationProblem, quietProblem, rotationSafetyProblem } from "./oloidRotation.js";
 import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, factsFor, forbiddenFor, mentionsPrice, mskCalendarDay, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_VKPLAY_FROM, OLOID_VKPLAY_RUBRIC, oloidRedeemUrl, promoActive, redactAppStoreCodes, type DetectiveRef, type Project, type Rubric } from "./projects.js";
 import type { HistoryItem } from "./store.js";
@@ -74,13 +75,15 @@ export async function draftPost(
       ? '{"text": "текст поста", "cardTitle": "два или три слова", "cardCaption": "подпись не длиннее 110 символов"}'
       : '{"text": "текст поста"}';
 
+  const passport = factsFor(p, now, rubric.id);
+  const factPack = p.id === "oloid" ? oloidPromptFacts(passport, history, now, { rubricId: rubric.id }) : null;
   const system = `Ты пишешь посты для Threads от лица автора проекта «${p.name}». Пишешь по-русски.
 
 ГОЛОС:
 ${p.voice}
 ${voiceNote ? `\nАККАУНТ:\n${voiceNote}\n` : ""}
 ФАКТЫ (единственный допустимый источник утверждений о проекте):
-${factsFor(p, now, rubric.id).map((f) => `• ${f}`).join("\n")}
+${(factPack?.facts ?? passport).map((f) => `• ${f}`).join("\n")}
 
 ЗАПРЕЩЕНО:
 ${forbiddenFor(p, rubric.id, now).map((f) => `• ${f}`).join("\n")}
@@ -104,18 +107,19 @@ ${jsonShape}`;
 
   const user = `Рубрика: ${rubric.brief}
 ${topic ? `Тема поста: ${topic}` : ""}
+${factPack ? oloidColorSteer(factPack.color, rubric.id) : ""}${factPack ? recentDetailNote(history) : ""}
 ${hints?.formatNote ? `Формат этого поста: ${hints.formatNote}` : ""}
 ${hints?.toneNote ? `Тон слота: ${hints.toneNote}` : ""}
 ${hints?.dateSteer ? `Повод дня (одна обычная публикация, без новых фактов): ${hints.dateSteer}` : ""}
 ${hints?.devFact ? `ЕДИНСТВЕННЫЙ числовой факт этого поста. Другие числа из фактов проекта не копируй:\n• ${hints.devFact}` : ""}
 ${hints?.characterLine ? `Единственная допустимая реплика, дословно и в кавычках: ${hints.characterLine}` : ""}
-${hints?.shownNote ? hints.shownNote : pictureNote ? `К посту будет приложена картинка из игры: ${pictureNote}. Можно опереться на одну её деталь; не описывай картинку целиком, не пиши «на картинке» и не добавляй того, чего на ней нет.` : ""}
+${hints?.shownNote ? `${hints.shownNote} Если в кадре есть деталь из списка недавних — не называй её, опиши другую видимую.` : pictureNote ? `К посту будет приложена картинка из игры: ${pictureNote}. Можно опереться на одну её деталь, если её нет в списке недавних деталей. Не описывай картинку целиком, не пиши «на картинке» и не добавляй того, чего на ней нет.` : ""}
 ${factCard ? `К тому же кадру будет квадратная карточка. В JSON добавь cardTitle и cardCaption.
 cardTitle — 2 или 3 слова, имя этого факта, без точки, кавычек и цены.
-cardCaption — тот же факт, что в тексте поста, одна или две короткие фразы, не длиннее 110 символов. Без ссылки, без цены, без призыва скачать, без спойлера и без числа, которого нет в факте этого поста.` : ""}
+cardCaption — тот же факт, что в тексте поста, одна или две короткие фразы, не длиннее 110 символов. Без ссылки, без цены, без призыва скачать, без спойлера, без шпателя и без числа, которого нет в факте этого поста.` : ""}
 ${wantPoll ? (provocation
-  ? "К посту будет опрос Threads: 2–4 варианта, каждый от 1 до 25 символов, без цифр, ссылок, цены, политики, религии и оскорблений. Варианты — короткие стороны спора, не факты об игре. В тексте задай вопрос и не перечисляй варианты списком."
-  : "К посту будет опрос Threads: 2–4 варианта, каждый от 1 до 25 символов, без цифр, ссылок, цены и спойлеров. Варианты — короткие ответы читателя, не факты об игре. В тексте задай вопрос и не перечисляй варианты списком.") : ""}
+  ? "К посту будет опрос Threads: 2–4 варианта, каждый от 1 до 25 символов и не длиннее 25 байт UTF-8 (кириллица — два байта, держи вариант короче 13 букв), без цифр, ссылок, цены, политики, религии и оскорблений. Варианты — короткие стороны спора, не факты об игре. В тексте задай вопрос и не перечисляй варианты списком."
+  : "К посту будет опрос Threads: 2–4 варианта, каждый от 1 до 25 символов и не длиннее 25 байт UTF-8 (кириллица — два байта, держи вариант короче 13 букв), без цифр, ссылок, цены и спойлеров. Варианты — короткие ответы читателя, не факты об игре. В тексте задай вопрос и не перечисляй варианты списком.") : ""}
 ${linkLine}
 ${code ? `Единственный код этого поста — вставь отдельной строкой ровно так, без изменений: ${code}\nЭто одноразовая бесплатная загрузка в App Store: код вводят там же, забирает первый. Других кодов нет и выдумывать их нельзя. Код оставь и в тексте отдельной строкой, без ссылки вокруг: его копируют вручную. Коротко скажи, что нажатие на ссылку само подставит код в App Store. Призыв в конце своими словами: скачать, поиграть и оставить отзыв. Фразу «скачай — поиграй — оставь отзыв» не копируй. Цену не упоминать.` : ""}
 ${season ? `Сезонный повод (по желанию): ${season}` : ""}
@@ -162,7 +166,7 @@ ${feedback ? `\nПредыдущий вариант отклонён: ${feedback
 // Строчный стиль «Олоида»: первая буква поста, строки и фразы — строчная.
 // Имена собственные из короткого списка не трогаем. Середину фразы не переписываем.
 const OLOID_PROPER =
-  /^(?:олоид\p{L}*|егор\p{L}*|яковлев\p{L}*|вер(?:а|ы|е|у|ой)|алик(?:а|у|ом|е)?|фед(?:я|и|е|ю|ей)|следовател\p{L}*|старушк\p{L}*|бабушк\p{L}*|сон(?:я|и|е|ю|ей)|disco|elysium|steam|android|ios|app|серафим\p{L}*|павловн\p{L}*|конюшенн\p{L}*|исаакиевск\p{L}*|зайчик\p{L}*|петербург(?:а|у|е|ом)?|санкт-петербург(?:а|у|е|ом)?|питер(?:а|у|е|ом)?|лиза|лизы|лизе|лизу|лизой|витя|вити|вите|витю|витей|тонет(?:а|у|е|ом)|ren|vk)$/iu;
+  /^(?:олоид\p{L}*|егор\p{L}*|яковлев\p{L}*|вер(?:а|ы|е|у|ой)|алик(?:а|у|ом|е)?|фед(?:я|и|е|ю|ей)|следовател\p{L}*|следак(?:а|у|ом|е)?|старушк\p{L}*|бабушк\p{L}*|сон(?:я|и|е|ю|ей)|disco|elysium|steam|android|ios|app|серафим\p{L}*|павловн\p{L}*|конюшенн\p{L}*|исаакиевск\p{L}*|зайчик\p{L}*|петербург(?:а|у|е|ом)?|санкт-петербург(?:а|у|е|ом)?|питер(?:а|у|е|ом)?|лиза|лизы|лизе|лизу|лизой|витя|вити|вите|витю|витей|тонет(?:а|у|е|ом)|ren|vk|mazkof)$/iu;
 
 export function lowercaseSentenceStarts(text: string): string {
   const urls: string[] = [];
@@ -245,6 +249,10 @@ export function ruleCheck(
   devFact?: string,
 ): string | null {
   if (!text) return "пустой текст";
+  if (p.id === "oloid") {
+    const tool = spatulaProblem(text);
+    if (tool) return tool;
+  }
   if (text.length > MAX_LEN) return `длина ${text.length} > ${MAX_LEN}`;
   if ((text.match(EMOJI) || []).length > 1) return "больше одного эмодзи";
   for (const re of BANNED) if (re.test(text)) return `запрещённый паттерн ${re}`;
@@ -505,7 +513,7 @@ function vkPlayFactNote(rubricId?: string): string {
 
 function cardFactNote(card?: { title: string; caption: string }): string {
   if (!card?.title && !card?.caption) return "";
-  return `К кадру приложена карточка. Заголовок: «${card.title}». Подпись: «${card.caption}». Это короткая выжимка того же факта, что в посте. Отклоняй спойлер, цену, штамп и утверждение, которого нет в фактах. Цены на карточке нет специально, даже если в фактах она есть: не требуй её. Число на карточке допустимо только из факта этого поста.\n`;
+  return `К кадру приложена карточка. Заголовок: «${card.title}». Подпись: «${card.caption}». Это короткая выжимка того же факта, что в посте. Отклоняй спойлер, цену, штамп, шпатель и утверждение, которого нет в фактах. Цены на карточке нет специально, даже если в фактах она есть: не требуй её. Число на карточке допустимо только из факта этого поста.\n`;
 }
 
 function rotationFactNote(rubricId?: string, devFact?: string, quiet?: boolean): string {
@@ -523,7 +531,7 @@ function oloidCheckNote(rubricId?: string, now = new Date()): string {
   const style =
     "Строчные буквы (кроме имён собственных), один восклицательный знак в первой строке и короткие абзацы (одна-две связанные фразы на строке, не больше трёх; между абзацами пустая строка; ссылка отдельной строкой после пустой) — заданный стиль, не отклоняй из-за этого.\nСсылка на apps.apple.com/ru/app/id6817809325 — официальная страница «Олоида» в App Store. Если она стоит в посте, не отклоняй из-за неё: UTM нет специально. ";
   if (rubricId === OLOID_DEV_NUMBERS_RUBRIC) {
-    return `${style}Это пост «цифры разработки». Цену не упоминать. Числа, которых нет в отдельном выбранном факте, отклоняй — в том числе 500 ₽, 2–3 часа, около 1600 реплик и 45 статей, даже если они есть в общих фактах.\n`;
+    return `${style}Это пост «цифры разработки». Цену не упоминать. Числа, которых нет в отдельном выбранном факте, отклоняй — в том числе 199 ₽, 2–3 часа, около 1600 реплик и 45 статей, даже если они есть в общих фактах.\n`;
   }
   if (rubricId === OLOID_VKPLAY_RUBRIC) {
     return `${style}«Вышло на VK Play» — факт этого поста, не отклоняй. Выход на Android или Steam — нет. Цену не упоминать. Если в посте есть цена — отклоняй.\n`;
@@ -538,7 +546,7 @@ function oloidCheckNote(rubricId?: string, now = new Date()): string {
     mskCalendarDay(now) >= OLOID_VKPLAY_FROM
       ? "«Вышло на VK Play» допустимо: это факт. "
       : "Выход на VK Play — нет. ";
-  return `${style}«Вышло на iOS / iPhone / iPad», «App Store» и цена 500 ₽ допустимы, когда они есть в фактах. ${vkLine}Выход на Android или Steam — нет.\n`;
+  return `${style}«Вышло на iOS / iPhone / iPad», «App Store» и цена 199 ₽ допустимы, когда они есть в фактах. ${vkLine}Выход на Android или Steam — нет.\n`;
 }
 
 export async function factCheck(

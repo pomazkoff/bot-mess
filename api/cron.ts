@@ -175,36 +175,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Карточка, которую Threads не скачал, заменяется обычным кадром. Опрос, если API его не принял, снимается внутри publishPost.
     let used = postMedia;
     let pollDropped = false;
+    let pollError: string | undefined;
+    const takePublished = (published: { id: string; pollDropped?: boolean; pollError?: string }) => {
+      pollDropped = Boolean(published.pollDropped);
+      pollError = published.pollError;
+      return published.id;
+    };
     const postId = await publishPost(channel, text, topicTag, postMedia, poll)
-      .then((published) => {
-        pollDropped = Boolean(published.pollDropped);
-        return published.id;
-      })
+      .then(takePublished)
       .catch(async (e) => {
         if (postAlreadyPublished(e)) throw e;
         if (cardUrl && draft.pictureUrl && postMedia?.url === cardUrl) {
           await notify(`⚠️ ${where}: карточка не прошла (${e?.message ?? e}), публикую пост с обычным кадром.`);
           used = { type: "IMAGE", url: draft.pictureUrl, droppable: true };
           try {
-            const shot = await publishPost(channel, text, topicTag, used, poll);
-            pollDropped = Boolean(shot.pollDropped);
-            return shot.id;
+            return takePublished(await publishPost(channel, text, topicTag, used, poll));
           } catch (e2: any) {
             if (postAlreadyPublished(e2)) throw e2;
             await notify(`⚠️ ${where}: медиа не прошло (${e2?.message ?? e2}), публикую пост без него.`);
             used = undefined;
-            const plain = await publishPost(channel, text, topicTag, undefined, poll);
-            pollDropped = Boolean(plain.pollDropped);
-            return plain.id;
+            return takePublished(await publishPost(channel, text, topicTag, undefined, poll));
           }
         }
         // Картинка не прошла — постим текст. Если контейнер уже опубликован, второй пост не создаём.
         if (!postMedia?.droppable && postMedia?.type !== "IMAGE") throw e;
         await notify(`⚠️ ${where}: медиа не прошло (${e?.message ?? e}), публикую пост без него.`);
         used = undefined;
-        const again = await publishPost(channel, text, topicTag, undefined, poll);
-        pollDropped = Boolean(again.pollDropped);
-        return again.id;
+        return takePublished(await publishPost(channel, text, topicTag, undefined, poll));
       });
     // День и код закрываем сразу после публикации, до истории: сбой записи в ленту не должен выдать код ещё раз.
     const appStoreSlot = rubricId === OLOID_APP_STORE_RUBRIC || rubricId === OLOID_APP_STORE_PROMO_RUBRIC;
@@ -254,7 +251,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const marks = [
       quiet ? "без ссылки" : "",
       pollOptions?.length ? "с опросом" : "",
-      pollDropped ? "опрос не принят, вышел текст" : "",
+      pollDropped ? `опрос не принят, вышел текст${pollError ? `: ${pollError}` : ""}` : "",
       dateHook ? `повод ${dateHook}` : "",
       devFactId ? `факт ${devFactId}` : "",
       provocationFormat ? `формат ${provocationFormat}` : "",
@@ -268,7 +265,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ? `\nКарточка: ${draft.card.title}\n${draft.card.caption}`
         : "";
     await notify(`✅ Опубликовано (${where}, ${rubricId}${mediaNote}${marks.length ? `, ${marks.join(", ")}` : ""}):${topic ? `\nТема: ${topic}` : ""}${topicTag ? `\nТема Threads: ${topicTag}` : ""}${promoLine}${cardReport}\n\n${text}`);
-    return res.json({ posted: true, channel: channel.id, project: project.id, rubric: rubricId, topic, media: used?.type === "CAROUSEL" ? used.urls : used?.url, mediaId: used ? mediaId : undefined, card: draft.card, cardUrl: usedCard ? cardUrl : undefined, cardFallback, promoCode, promoLeft, quiet, poll: pollOptions, pollDropped, dateHook, devFactId, provocationFormat, tone, postId, text });
+    return res.json({ posted: true, channel: channel.id, project: project.id, rubric: rubricId, topic, media: used?.type === "CAROUSEL" ? used.urls : used?.url, mediaId: used ? mediaId : undefined, card: draft.card, cardUrl: usedCard ? cardUrl : undefined, cardFallback, promoCode, promoLeft, quiet, poll: pollOptions, pollDropped, pollError, dateHook, devFactId, provocationFormat, tone, postId, text });
   } catch (e: any) {
     console.error(e);
     await notify(`❌ Threads-бот упал (${channel.name}): ${e?.message ?? e}`);
