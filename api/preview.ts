@@ -4,8 +4,6 @@ import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_FROM, OLOID_APP_STORE_PROM
 import { getAppStoreCodesUsed, getAppStoreDay, getHistory, getLastProject, getOloidRotationState, getProvocationDay, getProvocationState, getVkPlayDay } from "../lib/store.js";
 import { notify } from "../lib/notify.js";
 import { channelById } from "../lib/channels.js";
-import type { Media } from "../lib/projects.js";
-import type { FactCardCopy } from "../lib/factCard.js";
 
 // Холостой прогон: генерирует пост с полными проверками и возвращает текст.
 // Этот эндпоинт НЕ импортирует модуль публикации и ничего не пишет в историю —
@@ -71,7 +69,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const rotation = channel.projects.includes("oloid")
       ? await getOloidRotationState("oloid").catch((e) => ((redis = String(e?.message ?? e)), null))
       : null;
-    const draft = await makeDraft({
+    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, tone, mediaId, provocationFormat } = await makeDraft({
       channel,
       history,
       lastProject,
@@ -93,19 +91,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       lastAskWasPoll: rotation?.lastAskWasPoll,
       mediaUsed: rotation?.mediaUsed,
     });
-    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, tone, mediaId, provocationFormat, card, pictureUrl } = draft;
-    const resolved = text ? await resolvePreviewCard(card, pictureUrl, media) : { media };
-    const shownMedia = resolved.media ?? media;
     const promoLine = promoCode != null ? `\nПромокод: ${promoCode}. Осталось бы: ${promoLeft}. Код не списан.` : "";
-    const cardReport = resolved.cardFallback
-      ? `\n⚠️ карточка не собралась (${resolved.cardFallback}), в посте обычный кадр`
-      : resolved.cardUrl && card
-        ? `\nКарточка: ${card.title}\n${card.caption}`
-        : "";
-    const mediaLabel = resolved.cardUrl ? ", с карточкой" : shownMedia ? (shownMedia.type === "CAROUSEL" ? ", с каруселью" : shownMedia.type === "VIDEO" ? ", с видео" : ", с картинкой") : "";
     const telegram =
       req.query.notify === "1"
-        ? await notify(`🧪 Превью, НЕ опубликовано (${channel.name} · ${project.name}, ${rubricId}${mediaLabel}):${promoLine}${cardReport}\n\n${skipReason ?? text ?? "ни один вариант не прошёл проверки"}`)
+        ? await notify(`🧪 Превью, НЕ опубликовано (${channel.name} · ${project.name}, ${rubricId}${media ? (media.type === "CAROUSEL" ? ", с каруселью" : media.type === "VIDEO" ? ", с видео" : ", с картинкой") : ""}):${promoLine}\n\n${skipReason ?? text ?? "ни один вариант не прошёл проверки"}`)
         : undefined;
     return res.json({
       preview: true,
@@ -117,10 +106,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       rubric: rubricId,
       topic,
       topicTag,
-      media: shownMedia?.type === "CAROUSEL" ? shownMedia.urls : shownMedia?.url,
-      card,
-      cardUrl: resolved.cardUrl,
-      cardFallback: resolved.cardFallback,
+      media: media?.type === "CAROUSEL" ? media.urls : media?.url,
       mediaId,
       promoCode,
       promoLeft,
@@ -137,21 +123,5 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   } catch (e: any) {
     return res.status(500).json({ error: String(e?.message ?? e) });
-  }
-}
-
-/** Превью карточку не кэширует и не публикует. Сбой рендера не прячет текст. */
-async function resolvePreviewCard(
-  card: FactCardCopy | undefined,
-  pictureUrl: string | undefined,
-  media: Media | undefined,
-): Promise<{ media?: Media; cardUrl?: string; cardFallback?: string }> {
-  if (!card || !pictureUrl) return { media };
-  try {
-    const { resolveFactCardMedia } = await import("../lib/factCardRender.js");
-    return await resolveFactCardMedia({ media, card, pictureUrl, cache: false });
-  } catch (e) {
-    const reason = (e instanceof Error ? e.message : String(e)).replace(/\s+/g, " ").slice(0, 180);
-    return { media, cardFallback: reason };
   }
 }

@@ -196,22 +196,6 @@ export async function releaseScheduledClaim(id: string): Promise<void> {
   await (await db()).del(scheduledLockKey(id));
 }
 
-// Готовый PNG карточки факта. Threads скачивает его по /api/card вскоре после публикации.
-// Нет ключа — маршрут рисует карточку заново. Двое суток хватает на повторные запросы Meta.
-const factCardKey = (id: string) => `threads:factcard:${id}`;
-const FACT_CARD_TTL_SEC = 60 * 60 * 48;
-
-export async function saveFactCardPng(id: string, png: Buffer): Promise<void> {
-  if (png.length > 4_000_000) throw new Error("карточка слишком большая для кэша");
-  await (await db()).set(factCardKey(id), png.toString("base64"), { EX: FACT_CARD_TTL_SEC });
-}
-
-export async function getFactCardPng(id: string): Promise<Buffer | null> {
-  const raw = await (await db()).get(factCardKey(id));
-  if (!raw) return null;
-  return Buffer.from(raw, "base64");
-}
-
 // Очередь обычных постов «Олоида». Пишется только после успешной публикации.
 const rubricUsedKey = (projectId: string) => `threads:rubric_used:${projectId}`;
 const devFactUsedKey = (projectId: string) => `threads:dev_fact_used:${projectId}`;

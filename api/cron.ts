@@ -7,8 +7,6 @@ import { getAppStoreCodesUsed, getAppStoreDay, getHistory, getLastProject, getOl
 import { notify } from "../lib/notify.js";
 import { channelById } from "../lib/channels.js";
 import { publishDueScheduled } from "../lib/scheduled.js";
-import type { Media } from "../lib/projects.js";
-import type { FactCardCopy } from "../lib/factCard.js";
 
 // Публикующий эндпоинт. Вызывается только Vercel Cron (заголовок Authorization: Bearer <CRON_SECRET>).
 // ?channel=<id> — аккаунт Threads из lib/channels.ts (по умолчанию pomazkof).
@@ -134,12 +132,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!dry) await notify(`⚠️ Threads-бот (${where}): ни один вариант не прошёл проверки, пост пропущен.\n\n${rejected.join("\n\n")}`);
       return res.json({ posted: false, channel: channel.id, project: project.id, rejected });
     }
-
-    const resolved = await resolveCardMedia(draft.card, draft.pictureUrl, media, !dry);
-    const postMedia = resolved.media;
-    const cardUrl = resolved.cardUrl;
-    const cardFallback = resolved.cardFallback;
-
     if (dry) {
       return res.json({
         dry: true,
@@ -148,10 +140,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         rubric: rubricId,
         topic,
         topicTag,
-        media: postMedia?.type === "CAROUSEL" ? postMedia.urls : postMedia?.url,
-        card: draft.card,
-        cardUrl,
-        cardFallback,
+        media: media?.type === "CAROUSEL" ? media.urls : media?.url,
         mediaId,
         promoCode,
         promoLeft,
@@ -172,8 +161,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // Картинка — украшение: если Threads её не принял, публикуем текст без неё. Видео (трейлер) без файла не публикуем.
-    // Карточка, которую Threads не скачал, заменяется обычным кадром. Опрос, если API его не принял, снимается внутри publishPost.
-    let used = postMedia;
+    // Опрос, если API его не принял, снимается внутри publishPost: пост выходит текстом.
+    let used = media;
     let pollDropped = false;
     let pollError: string | undefined;
     const takePublished = (published: { id: string; pollDropped?: boolean; pollError?: string }) => {
@@ -181,24 +170,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       pollError = published.pollError;
       return published.id;
     };
-    const postId = await publishPost(channel, text, topicTag, postMedia, poll)
+    const postId = await publishPost(channel, text, topicTag, media, poll)
       .then(takePublished)
       .catch(async (e) => {
-        if (postAlreadyPublished(e)) throw e;
-        if (cardUrl && draft.pictureUrl && postMedia?.url === cardUrl) {
-          await notify(`⚠️ ${where}: карточка не прошла (${e?.message ?? e}), публикую пост с обычным кадром.`);
-          used = { type: "IMAGE", url: draft.pictureUrl, droppable: true };
-          try {
-            return takePublished(await publishPost(channel, text, topicTag, used, poll));
-          } catch (e2: any) {
-            if (postAlreadyPublished(e2)) throw e2;
-            await notify(`⚠️ ${where}: медиа не прошло (${e2?.message ?? e2}), публикую пост без него.`);
-            used = undefined;
-            return takePublished(await publishPost(channel, text, topicTag, undefined, poll));
-          }
-        }
         // Картинка не прошла — постим текст. Если контейнер уже опубликован, второй пост не создаём.
-        if (!postMedia?.droppable && postMedia?.type !== "IMAGE") throw e;
+        if ((!media?.droppable && media?.type !== "IMAGE") || postAlreadyPublished(e)) throw e;
         await notify(`⚠️ ${where}: медиа не прошло (${e?.message ?? e}), публикую пост без него.`);
         used = undefined;
         return takePublished(await publishPost(channel, text, topicTag, undefined, poll));
@@ -257,36 +233,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       provocationFormat ? `формат ${provocationFormat}` : "",
       tone === "morning" ? "утро" : tone === "evening" ? "вечер" : tone === "day" ? "день" : "",
     ].filter(Boolean);
-    const usedCard = Boolean(cardUrl && used?.url === cardUrl);
-    const mediaNote = usedCard ? ", с карточкой" : !used ? "" : used.type === "CAROUSEL" ? ", с каруселью" : used.type === "VIDEO" ? ", с видео" : ", с картинкой";
-    const cardReport = cardFallback
-      ? `\n⚠️ карточка не собралась (${cardFallback}), в посте обычный кадр`
-      : usedCard && draft.card
-        ? `\nКарточка: ${draft.card.title}\n${draft.card.caption}`
-        : "";
-    await notify(`✅ Опубликовано (${where}, ${rubricId}${mediaNote}${marks.length ? `, ${marks.join(", ")}` : ""}):${topic ? `\nТема: ${topic}` : ""}${topicTag ? `\nТема Threads: ${topicTag}` : ""}${promoLine}${cardReport}\n\n${text}`);
-    return res.json({ posted: true, channel: channel.id, project: project.id, rubric: rubricId, topic, media: used?.type === "CAROUSEL" ? used.urls : used?.url, mediaId: used ? mediaId : undefined, card: draft.card, cardUrl: usedCard ? cardUrl : undefined, cardFallback, promoCode, promoLeft, quiet, poll: pollOptions, pollDropped, pollError, dateHook, devFactId, provocationFormat, tone, postId, text });
+    const mediaNote = !used ? "" : used.type === "CAROUSEL" ? ", с каруселью" : used.type === "VIDEO" ? ", с видео" : ", с картинкой";
+    await notify(`✅ Опубликовано (${where}, ${rubricId}${mediaNote}${marks.length ? `, ${marks.join(", ")}` : ""}):${topic ? `\nТема: ${topic}` : ""}${topicTag ? `\nТема Threads: ${topicTag}` : ""}${promoLine}\n\n${text}`);
+    return res.json({ posted: true, channel: channel.id, project: project.id, rubric: rubricId, topic, media: used?.type === "CAROUSEL" ? used.urls : used?.url, mediaId: used ? mediaId : undefined, promoCode, promoLeft, quiet, poll: pollOptions, pollDropped, pollError, dateHook, devFactId, provocationFormat, tone, postId, text });
   } catch (e: any) {
     console.error(e);
     await notify(`❌ Threads-бот упал (${channel.name}): ${e?.message ?? e}`);
     return res.status(500).json({ error: String(e?.message ?? e) });
-  }
-}
-
-/** Рендер карточки не должен ронять слот: при ошибке остаётся обычный кадр. */
-async function resolveCardMedia(
-  card: FactCardCopy | undefined,
-  pictureUrl: string | undefined,
-  media: Media | undefined,
-  cache: boolean,
-): Promise<{ media?: Media; cardUrl?: string; cardFallback?: string }> {
-  if (!card || !pictureUrl) return { media };
-  try {
-    const { resolveFactCardMedia } = await import("../lib/factCardRender.js");
-    return await resolveFactCardMedia({ media, card, pictureUrl, cache });
-  } catch (e) {
-    const reason = (e instanceof Error ? e.message : String(e)).replace(/\s+/g, " ").slice(0, 180);
-    console.error("карточка не собралась:", reason);
-    return { media, cardFallback: reason };
   }
 }

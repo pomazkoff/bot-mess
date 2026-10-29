@@ -42,9 +42,6 @@
     },
     "api/stats.ts": {
       "maxDuration": 120
-    },
-    "api/card.ts": {
-      "maxDuration": 30
     }
   }
 }
