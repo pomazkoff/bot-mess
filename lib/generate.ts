@@ -39,7 +39,99 @@ export type DraftHints = {
   shownNote?: string; // карусель или ролик: описать видимое
   provocation?: boolean;
   formatNote?: string; // формат провокации: спор, сторона, непопулярное мнение, «а вы бы»
+  promoAngle?: PromoAngle; // угол поста appstore-promo (pickPromoAngle)
 };
+
+// ---------- appstore-promo: углы, заходы, концовки ----------
+
+/** Угол поста с кодом. fact — допустимый факт только для этого угла, checkNote — поправка фактчека. Без спойлеров. */
+export type PromoAngle = { id: string; label: string; steer: string; mark: RegExp; fact?: string; checkNote?: string };
+
+export const PROMO_ANGLES: PromoAngle[] = [
+  { id: "spb", label: "Угол: настоящий Петербург", mark: /петербург|питер|двор|доходн|улиц/iu,
+    steer: "настоящий Петербург: действие идёт в Санкт-Петербурге 2018 года — дворы-колодцы, доходные дома, мокрые улицы. одна городская деталь, без сюжета." },
+  { id: "painting", label: "Угол: визуал в стиле масляной живописи", mark: /живопис|охр|маслян|визуал/iu,
+    steer: "визуал в стиле масляной живописи: приглушённая тёплая охра, интерфейс теплеет или холодеет по свету сцены. пиши только «в стиле масляной живописи», не «нарисовано маслом»." },
+  { id: "voice", label: "Угол: озвучка актёрами", mark: /озвуч|актёр|актер|голос/iu,
+    steer: "озвучка: персонажей озвучили актёры, большая часть текста — внутренний голос Егора. не пиши про наушники и «половину работы»." },
+  { id: "guitar", label: "Угол: саундтрек на сольной акустической гитаре", mark: /гитар|tlenum|саундтрек|музык/iu,
+    steer: "саундтрек: сольная акустическая гитара, музыку написал TLENUM. одна фраза о том, как это звучит вечером, без «половины работы».",
+    fact: "Саундтрек «Олоида» — сольная акустическая гитара; музыку написал TLENUM." },
+  { id: "kommunalki", label: "Угол: экскурсии по коммуналкам", mark: /экскурси|коммунал/iu,
+    steer: "ради игры команда ходила на экскурсии по петербургским коммуналкам: одна бытовая деталь оттуда (кухня, коридор, звонки у двери), без сюжета." },
+  { id: "choices", label: "Угол: решения игрока", mark: /выбор|решени|концовк/iu,
+    steer: "решения игрока: выборы запоминаются и переходят в следующие эпизоды. одной общей фразой, не называя ни одного выбора, его последствий и концовок.",
+    checkNote: "В этом посте допустима одна общая фраза, что выборы игрока запоминаются и переходят в следующие эпизоды — это факт. Конкретные выборы, их последствия и концовки — отклоняй.\n" },
+  { id: "mystery", label: "Угол: мистический детектив", mark: /мисти|загадк|тайн|детектив/iu,
+    steer: "мистический детектив: одна странная деталь или вопрос без разгадки. не хоррор, без поворотов сюжета, тайной комнаты и природы артефакта." },
+];
+
+// Направления, не цитаты: формулировку каждый раз пишет модель.
+const PROMO_OPENINGS = [
+  "обращение к городу или к тем, кто любит медленные истории, и сразу деталь угла",
+  "вопрос читателю по теме угла",
+  "короткая сцена по теме угла: одно место, звук или свет — код уже потом",
+  "новость от команды своими словами, не «дарим код» и не «раздаём один код»",
+  "бытовое наблюдение (вечер, старый дом, дорога домой) и мостик к игре",
+  "одна странная деталь без объяснения",
+];
+const PROMO_CLOSINGS = [
+  "вопрос по теме угла и просьба написать, как вам",
+  "позвать успеть первым, а потом рассказать впечатления в комментариях",
+  "предложить сыграть сегодня вечером и вернуться с отзывом",
+  "попросить честный отзыв после первой главы",
+  "коротко: кто заберёт код — напишите пару слов",
+];
+
+const dayIndex = (now: Date) => Math.floor(Date.parse(`${mskCalendarDay(now)}T00:00:00Z`) / 86_400_000);
+const isAppStorePost = (h: HistoryItem) => h.project === "oloid" && (h.rubric === OLOID_APP_STORE_RUBRIC || h.rubric === OLOID_APP_STORE_PROMO_RUBRIC);
+
+/** Угол, который дольше всех не был в постах App Store (по теме или по словам текста); ничья — по дате МСК. */
+export function pickPromoAngle(history: HistoryItem[], now: Date, exclude: string[] = [], wanted?: string): PromoAngle {
+  const pool = PROMO_ANGLES.filter((a) => !exclude.includes(a.id));
+  const list = pool.length ? pool : PROMO_ANGLES;
+  const forced = wanted && list.find((a) => a.label.toLowerCase().includes(wanted) || a.id === wanted);
+  if (forced) return forced;
+  const posts = history.filter(isAppStorePost);
+  const age = (a: PromoAngle) => {
+    const i = posts.findIndex((h) => h.topic === a.label || a.mark.test(stripPromoBoilerplate(h.text)));
+    return i < 0 ? Infinity : i;
+  };
+  const start = dayIndex(now) % list.length;
+  const rotated = [...list.slice(start), ...list.slice(0, start)];
+  return rotated.reduce((best, a) => (age(a) > age(best) ? a : best));
+}
+
+function promoCodeNote(code: string, angle: PromoAngle | undefined, history: HistoryItem[], now: Date): string {
+  const d = dayIndex(now);
+  const pick = (list: string[], n: number) => Array.from({ length: n }, (_, k) => list[(d + k) % list.length]);
+  const recent = history
+    .filter(isAppStorePost)
+    .slice(0, 6)
+    .map((h) => `— ${redactAppStoreCodes(h.text).replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim()}`)
+    .join("\n");
+  return `Единственный код этого поста — вставь отдельной строкой ровно так, без изменений: ${code}
+Других кодов нет и выдумывать их нельзя. Код оставь в тексте отдельной строкой, без ссылки вокруг: его копируют вручную.
+Смысл, который должен быть, — каждый раз другими словами и в другом порядке: загрузка по коду бесплатная; код одноразовый, успеет первый; нажатие на ссылку само подставит код в App Store; в конце позвать скачать, поиграть и оставить отзыв. Цену не упоминать.
+${angle ? `Угол этого поста (главная мысль до кода): ${angle.steer}\n` : ""}Заход — один из вариантов, своими словами: ${pick(PROMO_OPENINGS, 3).join("; ")}.
+Концовка перед ссылкой — один из вариантов, своими словами: ${pick(PROMO_CLOSINGS, 2).join("; ")}.
+Не пиши шаблоны прошлых постов: «дарим один код», «раздаём код», «играйте в наушниках», «звук — половина работы», «код одноразовый, его вводят в App Store, забирает первый», «нажатие на ссылку само подставит код», «берите, ставьте».
+${recent ? `Недавние посты App Store — НЕ повторяй их заход, угол, фразы и концовку:\n${recent}\n` : ""}`;
+}
+
+// Обязательные для поста с кодом смыслы: при сравнении с прошлыми постами их не считаем.
+const PROMO_REQUIRED = /бесплатн|одноразов|перв(?:ый|ым|ой)|подстав|примен|нажм|нажат|нажим|тапн|скач|загруз|поигра|отзыв|пару слов|как вам|app\s*store|iphone|ipad|айфон/iu;
+
+/** Текст поста App Store без кода, ссылок и коротких обязательных фраз — то, что остаётся для антиповтора. */
+export function stripPromoBoilerplate(text: string): string {
+  return redactAppStoreCodes(text)
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/\[код\]/g, " ")
+    .split(/(?<=[.!?…])\s+|\n+/u)
+    .map((s) => s.trim())
+    .filter((s) => s && !(PROMO_REQUIRED.test(s) && s.length <= 90))
+    .join("\n");
+}
 
 export async function draftPost(
   p: Project,
@@ -77,7 +169,7 @@ export async function draftPost(
 ${p.voice}
 ${voiceNote ? `\nАККАУНТ:\n${voiceNote}\n` : ""}
 ФАКТЫ (единственный допустимый источник утверждений о проекте):
-${(factPack?.facts ?? passport).map((f) => `• ${f}`).join("\n")}
+${[...(factPack?.facts ?? passport), ...(code && hints?.promoAngle?.fact ? [hints.promoAngle.fact] : [])].map((f) => `• ${f}`).join("\n")}
 
 ЗАПРЕЩЕНО:
 ${forbiddenFor(p, rubric.id, now).map((f) => `• ${f}`).join("\n")}
@@ -112,7 +204,7 @@ ${wantPoll ? (provocation
   ? "К посту будет опрос Threads: 2–4 варианта, каждый от 1 до 25 символов и не длиннее 25 байт UTF-8 (кириллица — два байта, держи вариант короче 13 букв), без цифр, ссылок, цены, политики, религии и оскорблений. Варианты — короткие стороны спора, не факты об игре. В тексте задай вопрос и не перечисляй варианты списком."
   : "К посту будет опрос Threads: 2–4 варианта, каждый от 1 до 25 символов и не длиннее 25 байт UTF-8 (кириллица — два байта, держи вариант короче 13 букв), без цифр, ссылок, цены и спойлеров. Варианты — короткие ответы читателя, не факты об игре. В тексте задай вопрос и не перечисляй варианты списком.") : ""}
 ${linkLine}
-${code ? `Единственный код этого поста — вставь отдельной строкой ровно так, без изменений: ${code}\nЭто одноразовая бесплатная загрузка в App Store: код вводят там же, забирает первый. Других кодов нет и выдумывать их нельзя. Код оставь и в тексте отдельной строкой, без ссылки вокруг: его копируют вручную. Коротко скажи, что нажатие на ссылку само подставит код в App Store. Призыв в конце своими словами: скачать, поиграть и оставить отзыв. Фразу «скачай — поиграй — оставь отзыв» не копируй. Цену не упоминать.` : ""}
+${code ? promoCodeNote(code, hints?.promoAngle, history, now) : ""}
 ${season ? `Сезонный повод (по желанию): ${season}` : ""}
 ${detectiveHint ? `Обязательная отсылка в этом посте (мем, не факт о проекте и не связь с фильмом): ${detectiveHint}` : ""}
 
@@ -455,12 +547,14 @@ export function repeatedEnding(text: string, history: HistoryItem[], projectId: 
   return null;
 }
 
-export function tooSimilar(text: string, history: HistoryItem[]): string | null {
-  const a = trigrams(text);
-  const opening = text.slice(0, 30).toLowerCase();
+/** promo — пост с кодом: код, ссылки и короткие обязательные фразы в сравнение не входят (с обеих сторон). */
+export function tooSimilar(text: string, history: HistoryItem[], promo = false): string | null {
+  const prep = (t: string) => (promo ? stripPromoBoilerplate(t) : t);
+  const a = trigrams(prep(text));
+  const opening = prep(text).slice(0, 30).toLowerCase();
   for (const h of history.slice(0, 40)) {
-    if (h.text.slice(0, 30).toLowerCase() === opening) return "такое же начало, как у недавнего поста";
-    const b = trigrams(h.text);
+    if (prep(h.text).slice(0, 30).toLowerCase() === opening) return "такое же начало, как у недавнего поста";
+    const b = trigrams(prep(h.text));
     let inter = 0;
     for (const x of a) if (b.has(x)) inter++;
     const jaccard = inter / (a.size + b.size - inter || 1);
@@ -471,12 +565,12 @@ export function tooSimilar(text: string, history: HistoryItem[]): string | null 
 
 // ---------- Фактчек вторым проходом ----------
 
-function appStoreFactNote(rubricId?: string, promoCode?: string): string {
+function appStoreFactNote(rubricId?: string, promoCode?: string, angle?: PromoAngle): string {
   if (rubricId !== OLOID_APP_STORE_RUBRIC && rubricId !== OLOID_APP_STORE_PROMO_RUBRIC) return "";
   const common =
     "Это пост рубрики App Store. Яркий момент из фактов и кадра (атмосфера, коммуналка, Петербург, живопись, озвучка, звук, механика) — можно. Отклоняй скелет, повороты сюжета, убийц, концовки, кадр «олоид на ладони» и имена, которых нет в фактах. Скелет в фактах есть, но в этом посте его быть не должно. Цену не упоминать. Если в посте есть цена — отклоняй. Отклоняй эксклюзив: «эксклюзив», «только в App Store», «только на iOS», «только на iPhone», «iOS-only», «на других платформах релиза не было».\n";
   if (rubricId === OLOID_APP_STORE_PROMO_RUBRIC && promoCode) {
-    return `${common}В этом посте один настоящий код бесплатной загрузки, ровно ${promoCode}: отдельной строкой в тексте и внутри ссылки. Ссылка ровно https://apps.apple.com/redeem?code=${promoCode} — официальная, она открывает App Store и подставляет этот код. Не отклоняй из-за этой ссылки и не требуй страницу apps.apple.com/ru/app/id6817809325. Фраза, что нажатие на ссылку подставит код, — верная. Загрузка по коду бесплатная, код одноразовый, забирает первый. Не отклоняй из-за этого кода, слова «бесплатно» про эту загрузку и призыва скачать, поиграть и оставить отзыв. Других кодов быть не должно.\n`;
+    return `${common}В этом посте один настоящий код бесплатной загрузки, ровно ${promoCode}: отдельной строкой в тексте и внутри ссылки. Ссылка ровно https://apps.apple.com/redeem?code=${promoCode} — официальная, она открывает App Store и подставляет этот код. Не отклоняй из-за этой ссылки и не требуй страницу apps.apple.com/ru/app/id6817809325. Фраза, что нажатие на ссылку подставит код, — верная. Загрузка по коду бесплатная, код одноразовый, забирает первый. Не отклоняй из-за этого кода, слова «бесплатно» про эту загрузку и призыва скачать, поиграть и оставить отзыв. Других кодов быть не должно.\n${angle?.checkNote ?? ""}`;
   }
   return `${common}Промокоды и бесплатную раздачу в этом посте отклоняй: это другой тип поста.\n`;
 }
@@ -532,12 +626,12 @@ export async function factCheck(
   p: Project,
   pictureNote?: string,
   now = new Date(),
-  opts?: { rubricId?: string; promoCode?: string; devFact?: string; quiet?: boolean },
+  opts?: { rubricId?: string; promoCode?: string; devFact?: string; quiet?: boolean; promoAngle?: PromoAngle },
 ): Promise<string | null> {
   const r = await askJson<{ ok: boolean; reason: string }>(
     `Ты строгий редактор-фактчекер. Проверь пост о проекте «${p.name}».
-${p.id === "oloid" ? oloidCheckNote(opts?.rubricId, now) : ""}${rotationFactNote(opts?.rubricId, opts?.devFact, opts?.quiet)}${provocationFactNote(opts?.rubricId, opts?.quiet)}${appStoreFactNote(opts?.rubricId, opts?.promoCode)}${vkPlayFactNote(opts?.rubricId)}${p.id === "buro" ? `Отсылки к детективам — стиль и шутка, не факты о проекте. Допустимы только эти якоря, каждый своим героем:\n${BURO_DETECTIVE_REFS.map((ref) => `• ${ref.hint}`).join("\n")}\nНе отклоняй такую шутку, если она узнаваемая и не приписана чужому персонажу. Отклоняй, если пост утверждает, что сервис основан на фильме, снят по нему или связан с правообладателем, если цитата приписана не тому герою, если раскрыта развязка или описана жестокость, или если шутка непристойная.\n` : ""}Допустимые факты:
-${factsFor(p, now, opts?.rubricId).map((f) => `• ${f}`).join("\n")}
+${p.id === "oloid" ? oloidCheckNote(opts?.rubricId, now) : ""}${rotationFactNote(opts?.rubricId, opts?.devFact, opts?.quiet)}${provocationFactNote(opts?.rubricId, opts?.quiet)}${appStoreFactNote(opts?.rubricId, opts?.promoCode, opts?.promoAngle)}${vkPlayFactNote(opts?.rubricId)}${p.id === "buro" ? `Отсылки к детективам — стиль и шутка, не факты о проекте. Допустимы только эти якоря, каждый своим героем:\n${BURO_DETECTIVE_REFS.map((ref) => `• ${ref.hint}`).join("\n")}\nНе отклоняй такую шутку, если она узнаваемая и не приписана чужому персонажу. Отклоняй, если пост утверждает, что сервис основан на фильме, снят по нему или связан с правообладателем, если цитата приписана не тому герою, если раскрыта развязка или описана жестокость, или если шутка непристойная.\n` : ""}Допустимые факты:
+${[...factsFor(p, now, opts?.rubricId), ...(opts?.promoCode && opts.promoAngle?.fact ? [opts.promoAngle.fact] : [])].map((f) => `• ${f}`).join("\n")}
 Запрещено:
 ${forbiddenFor(p, opts?.rubricId, now).map((f) => `• ${f}`).join("\n")}
 ${pictureNote ? `\nК посту приложена картинка из игры: ${pictureNote}. Детали, которые на ней видны, допустимы.\n` : ""}
