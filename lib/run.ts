@@ -1,5 +1,5 @@
 import { OLOID_DEV_NUMBER_FACTS, OLOID_DEV_NUMBERS_RUBRIC } from "./devFacts.js";
-import { appStoreCodeProblem, appStoreMomentProblem, appStorePriceProblem, detectiveRefProblem, draftPost, repeatedEnding, ruleCheck, tooSimilar, vkPlayProblem, factCheck } from "./generate.js";
+import { appStoreCodeProblem, appStoreMomentProblem, appStorePriceProblem, detectiveRefProblem, draftPost, pickPromoAngle, repeatedEnding, ruleCheck, tooSimilar, vkPlayProblem, factCheck } from "./generate.js";
 import { oloidRepeatProblem, spatulaProblem, topicRepeatsRecent } from "./oloidFacts.js";
 import {
   OLOID_ASK_RUBRIC,
@@ -426,6 +426,9 @@ export async function makeDraft(opts: {
     return { project, rubricId: rubric.id, topic, topicTag, text: null, rejected: [DEV_NUMBERS_SKIP], skipReason: DEV_NUMBERS_SKIP, tone, regularCount };
   }
   if (devFact) topic = devFact.label;
+  // Пост с кодом: угол — тот, что дольше всех не был в постах App Store; ничья — по дате МСК.
+  let promoAngle = rubric.id === OLOID_APP_STORE_PROMO_RUBRIC ? pickPromoAngle(history, now, [], wanted) : undefined;
+  if (promoAngle) topic = promoAngle.label;
   const line = rubric.id === OLOID_LINE_RUBRIC
     ? pickCharacterLine(mergeLastUsed(lineUsed, projectHistory.map((item) => ({ id: item.lineId, at: item.at }))))
     : null;
@@ -489,9 +492,11 @@ export async function makeDraft(opts: {
     shownNote: shown?.note,
     provocation,
     formatNote: provocationFormat?.steer,
+    promoAngle,
   };
 
-  for (let i = 0; i < MAX_ATTEMPTS; i++) {
+  let attempts = MAX_ATTEMPTS;
+  for (let i = 0; i < attempts; i++) {
     const drafted = await draftPost(project, rubric, history, now, feedback, topic, channel.voiceNote, linkContent, picture?.about, detective?.hint, promoCode, hints);
     const candidate = drafted.text;
     const withOptions = [candidate, ...(drafted.options ?? [])].join("\n");
@@ -504,17 +509,26 @@ export async function makeDraft(opts: {
       vkPlayProblem(candidate, project.id, rubric.id) ??
       (detective ? detectiveRefProblem(candidate, history, detective) : null) ??
       repeatedEnding(candidate, history, project.id) ??
-      tooSimilar(candidate, history) ??
+      tooSimilar(candidate, history, rubric.id === OLOID_APP_STORE_PROMO_RUBRIC) ??
       (project.id === "oloid" ? oloidRepeatProblem(withOptions, history, now) : null) ??
-      (await factCheck(candidate, project, shown?.note ?? picture?.about, now, { rubricId: rubric.id, promoCode, devFact: devFact?.text, quiet }));
+      (await factCheck(candidate, project, shown?.note ?? picture?.about, now, { rubricId: rubric.id, promoCode, devFact: devFact?.text, quiet, promoAngle }));
     if (problem) {
       feedback = problem;
       rejected.push(`${problem}: ${candidate}`);
+      // Пост с кодом: все варианты не прошли — ещё одна попытка с другим углом, потом пропуск.
+      if (promoAngle && attempts === MAX_ATTEMPTS && i === attempts - 1) {
+        promoAngle = pickPromoAngle(history, now, [promoAngle.id]);
+        hints.promoAngle = promoAngle;
+        base.topic = promoAngle.label;
+        feedback = `${problem}. Угол сменён: ${promoAngle.steer} Напиши пост заново, не похожий ни на прошлые посты, ни на отклонённые варианты`;
+        rejected.push(`дополнительный раунд, угол: ${promoAngle.label}`);
+        attempts++;
+      }
       continue;
     }
     const pollLexicon = wantPoll && provocation && drafted.options ? provocationLexiconProblem(drafted.options.join("\n")) : null;
     const pollErr = wantPoll ? pollLexicon ?? pollOptionsProblem(drafted.options) : null;
-    if (pollErr && i < MAX_ATTEMPTS - 1) {
+    if (pollErr && i < attempts - 1) {
       feedback = pollErr;
       rejected.push(`${pollErr}: ${candidate}`);
       continue;
