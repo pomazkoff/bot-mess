@@ -1,5 +1,5 @@
 import { OLOID_DEV_NUMBER_FACTS, OLOID_DEV_NUMBERS_RUBRIC } from "./devFacts.js";
-import { appStoreCodeProblem, appStoreMomentProblem, appStorePriceProblem, detectiveRefProblem, draftPost, pickPromoAngle, repeatedEnding, ruleCheck, tooSimilar, vkPlayProblem, factCheck } from "./generate.js";
+import { appStoreCodeProblem, appStoreMomentProblem, appStorePriceProblem, detectiveRefProblem, draftPost, pickPromoAngle, promptMetaProblem, repeatedEnding, ruleCheck, similarityScore, stripPromptMeta, tooSimilar, vkPlayProblem, factCheck, type PromoAngle } from "./generate.js";
 import { oloidRepeatProblem, spatulaProblem, topicRepeatsRecent } from "./oloidFacts.js";
 import {
   OLOID_ASK_RUBRIC,
@@ -31,6 +31,8 @@ import type { Channel } from "./channels.js";
 import { pickRegularShown } from "./variety.js";
 
 const MAX_ATTEMPTS = 3;
+// Пост с кодом: запасной вариант (все попытки упёрлись в похожесть) — только если Jaccard с недавними ниже этого (обычный порог 0.45).
+const PROMO_FALLBACK_MAX_SIMILARITY = 0.8;
 
 export type Draft = {
   project: Project;
@@ -57,6 +59,8 @@ export type Draft = {
   provocationFormat?: string;
   /** Сколько провокаций уже вышло до этой. Чётные — опрос, нечётные — ссылка. */
   provocationCount?: number;
+  /** Пост с кодом: все попытки упёрлись только в похожесть, вышел лучший вариант, прошедший жёсткие проверки и фактчек. */
+  fallback?: boolean;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -493,49 +497,80 @@ export async function makeDraft(opts: {
     provocation,
     formatNote: provocationFormat?.steer,
     promoAngle,
+    promoAttempt: 0,
+    promoRejected: [] as string[],
   };
 
-  let attempts = MAX_ATTEMPTS;
+  // Пост с кодом: 3 попытки и ещё одна, у каждой свой угол и свои приёмы начала и финала.
+  // Если все упёрлись только в похожесть — выходит лучший вариант, прошедший жёсткие проверки и фактчек: коды раздаём каждый день.
+  const isPromo = rubric.id === OLOID_APP_STORE_PROMO_RUBRIC;
+  const attempts = isPromo ? MAX_ATTEMPTS + 1 : MAX_ATTEMPTS;
+  const triedAngles: string[] = [];
+  let fallback: { text: string; angle?: PromoAngle; score: number } | undefined;
+  let closestCopy = Infinity; // похожесть лучшего варианта, отбитого только как копия
+
   for (let i = 0; i < attempts; i++) {
+    if (isPromo && promoAngle) {
+      if (i > 0) promoAngle = pickPromoAngle(history, now, triedAngles);
+      triedAngles.push(promoAngle.id);
+      hints.promoAngle = promoAngle;
+      hints.promoAttempt = i;
+      topic = promoAngle.label;
+    }
     const drafted = await draftPost(project, rubric, history, now, feedback, topic, channel.voiceNote, linkContent, picture?.about, detective?.hint, promoCode, hints);
-    const candidate = drafted.text;
+    // Пост с кодом: скопированные указания задания («коротко скажи, что…:») срезаем до проверок.
+    const candidate = isPromo ? stripPromptMeta(drafted.text) : drafted.text;
     const withOptions = [candidate, ...(drafted.options ?? [])].join("\n");
-    const problem =
+    const check = () => factCheck(candidate, project, shown?.note ?? picture?.about, now, { rubricId: rubric.id, promoCode, devFact: devFact?.text, quiet, promoAngle });
+    const hard =
       ruleCheck(candidate, project, now, rubric, linkContent, promoCode, quiet, devFact?.text) ??
       (project.id === "oloid" ? spatulaProblem(withOptions) : null) ??
       appStoreCodeProblem(candidate, project.id, rubric.id, promoCode) ??
       appStorePriceProblem(candidate, project.id, rubric.id) ??
       appStoreMomentProblem(candidate, project.id, rubric.id) ??
       vkPlayProblem(candidate, project.id, rubric.id) ??
-      (detective ? detectiveRefProblem(candidate, history, detective) : null) ??
-      repeatedEnding(candidate, history, project.id) ??
-      tooSimilar(candidate, history, rubric.id === OLOID_APP_STORE_PROMO_RUBRIC) ??
-      (project.id === "oloid" ? oloidRepeatProblem(withOptions, history, now) : null) ??
-      (await factCheck(candidate, project, shown?.note ?? picture?.about, now, { rubricId: rubric.id, promoCode, devFact: devFact?.text, quiet, promoAngle }));
+      (isPromo ? promptMetaProblem(candidate) : null) ??
+      (detective ? detectiveRefProblem(candidate, history, detective) : null);
+    const soft = hard
+      ? null
+      : repeatedEnding(candidate, history, project.id) ??
+        tooSimilar(candidate, history, isPromo) ??
+        (project.id === "oloid" ? oloidRepeatProblem(withOptions, history, now) : null);
+    let problem = hard ?? soft;
+    if (!problem) {
+      problem = await check();
+    } else if (isPromo && !hard) {
+      // Только похожесть: фактчек (спойлеры, выдумки) всё равно обязателен, иначе в запас не берём.
+      const fc = await check();
+      if (fc) problem = `${soft}; фактчек: ${fc}`;
+      else {
+        const score = similarityScore(candidate, history, true);
+        // Копию недавнего поста не публикуем даже запасом: только пограничная похожесть.
+        if (score < PROMO_FALLBACK_MAX_SIMILARITY && (!fallback || score < fallback.score)) fallback = { text: candidate, angle: promoAngle, score };
+        else closestCopy = Math.min(closestCopy, score);
+      }
+    }
     if (problem) {
       feedback = problem;
-      rejected.push(`${problem}: ${candidate}`);
-      // Пост с кодом: все варианты не прошли — ещё одна попытка с другим углом, потом пропуск.
-      if (promoAngle && attempts === MAX_ATTEMPTS && i === attempts - 1) {
-        promoAngle = pickPromoAngle(history, now, [promoAngle.id]);
-        hints.promoAngle = promoAngle;
-        base.topic = promoAngle.label;
-        feedback = `${problem}. Угол сменён: ${promoAngle.steer} Напиши пост заново, не похожий ни на прошлые посты, ни на отклонённые варианты`;
-        rejected.push(`дополнительный раунд, угол: ${promoAngle.label}`);
-        attempts++;
-      }
+      hints.promoRejected.push(candidate);
+      rejected.push(`#${i + 1}${isPromo && promoAngle ? ` [${promoAngle.label}]` : ""} ❌ ${problem}\n${candidate}`);
       continue;
     }
     const pollLexicon = wantPoll && provocation && drafted.options ? provocationLexiconProblem(drafted.options.join("\n")) : null;
     const pollErr = wantPoll ? pollLexicon ?? pollOptionsProblem(drafted.options) : null;
     if (pollErr && i < attempts - 1) {
       feedback = pollErr;
-      rejected.push(`${pollErr}: ${candidate}`);
+      rejected.push(`#${i + 1} ❌ ${pollErr}\n${candidate}`);
       continue;
     }
     const poll = wantPoll && !pollErr && drafted.options ? toPollAttachment(drafted.options) : undefined;
     if (pollErr) rejected.push(`опрос снят, пост без опроса: ${pollErr}: ${candidate}`);
-    return { ...base, text: candidate, poll, rejected };
+    return { ...base, ...(isPromo ? { topic } : {}), text: candidate, poll, rejected };
   }
+  if (fallback) {
+    rejected.push(`⚠️ вышел запасной вариант: прошёл жёсткие проверки и фактчек, похожесть ${fallback.score.toFixed(2)}`);
+    return { ...base, topic: fallback.angle?.label ?? base.topic, text: fallback.text, rejected, fallback: true };
+  }
+  if (isPromo && closestCopy < Infinity) rejected.push(`запасного варианта нет: лучший прошедший жёсткие проверки совпадает с недавним постом на ${closestCopy.toFixed(2)} (предел ${PROMO_FALLBACK_MAX_SIMILARITY})`);
   return { ...base, text: null, rejected };
 }
