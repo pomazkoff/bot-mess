@@ -40,6 +40,8 @@ export type DraftHints = {
   provocation?: boolean;
   formatNote?: string; // формат провокации: спор, сторона, непопулярное мнение, «а вы бы»
   promoAngle?: PromoAngle; // угол поста appstore-promo (pickPromoAngle)
+  promoAttempt?: number; // номер попытки appstore-promo: у каждой свой приём начала и финала
+  promoRejected?: string[]; // отклонённые варианты этого запуска — не повторять
 };
 
 // ---------- appstore-promo: углы, заходы, концовки ----------
@@ -66,21 +68,21 @@ export const PROMO_ANGLES: PromoAngle[] = [
     steer: "мистический детектив: одна странная деталь или вопрос без разгадки. не хоррор, без поворотов сюжета, тайной комнаты и природы артефакта." },
 ];
 
-// Направления, не цитаты: формулировку каждый раз пишет модель.
+// Описания приёмов, не текст: ни повелительного наклонения, ни готовых фраз — модель их не копирует.
 const PROMO_OPENINGS = [
-  "обращение к городу или к тем, кто любит медленные истории, и сразу деталь угла",
-  "вопрос читателю по теме угла",
-  "короткая сцена по теме угла: одно место, звук или свет — код уже потом",
-  "новость от команды своими словами, не «дарим код» и не «раздаём один код»",
-  "бытовое наблюдение (вечер, старый дом, дорога домой) и мостик к игре",
-  "одна странная деталь без объяснения",
+  "приём «город»: первая строка — обращение к Петербургу или к любителям медленных историй, сразу за ним деталь угла",
+  "приём «вопрос»: первая строка — вопрос читателю, связанный с углом",
+  "приём «сцена»: одно место, звук или свет из угла; о коде — только во втором абзаце",
+  "приём «новость команды»: короткая новость от лица команды («мы…»), без слов «дарим» и «раздаём»",
+  "приём «наблюдение»: бытовая деталь (вечер, старый дом, дорога домой) и мостик к игре",
+  "приём «странная деталь»: одна необъяснённая деталь из угла, без разгадки",
 ];
 const PROMO_CLOSINGS = [
-  "вопрос по теме угла и просьба написать, как вам",
-  "позвать успеть первым, а потом рассказать впечатления в комментариях",
-  "предложить сыграть сегодня вечером и вернуться с отзывом",
-  "попросить честный отзыв после первой главы",
-  "коротко: кто заберёт код — напишите пару слов",
+  "финал-вопрос по теме угла вместе с просьбой об отзыве",
+  "финал о скорости: код у того, кто успел, и просьба рассказать о впечатлениях",
+  "финал «на вечер»: сыграть сегодня и вернуться с отзывом",
+  "финал «первая глава»: честный отзыв после первой главы",
+  "финал одной короткой фразой: тот, кто забрал код, пишет пару слов",
 ];
 
 const dayIndex = (now: Date) => Math.floor(Date.parse(`${mskCalendarDay(now)}T00:00:00Z`) / 86_400_000);
@@ -102,25 +104,50 @@ export function pickPromoAngle(history: HistoryItem[], now: Date, exclude: strin
   return rotated.reduce((best, a) => (age(a) > age(best) ? a : best));
 }
 
-function promoCodeNote(code: string, angle: PromoAngle | undefined, history: HistoryItem[], now: Date): string {
+function promoCodeNote(code: string, angle: PromoAngle | undefined, history: HistoryItem[], now: Date, attempt = 0, rejectedDrafts: string[] = []): string {
   const d = dayIndex(now);
-  const pick = (list: string[], n: number) => Array.from({ length: n }, (_, k) => list[(d + k) % list.length]);
-  const recent = history
-    .filter(isAppStorePost)
-    .slice(0, 6)
-    .map((h) => `— ${redactAppStoreCodes(h.text).replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim()}`)
-    .join("\n");
+  // Каждая попытка — свой приём начала и финала (шаг 2 по началам, чтобы соседние попытки не совпадали).
+  const opening = PROMO_OPENINGS[(d + attempt * 2) % PROMO_OPENINGS.length];
+  const closing = PROMO_CLOSINGS[(d + attempt) % PROMO_CLOSINGS.length];
+  const flat = (t: string) => redactAppStoreCodes(t).replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim();
+  const recent = history.filter(isAppStorePost).slice(0, 6).map((h) => `— ${flat(h.text)}`).join("\n");
+  const tried = rejectedDrafts.slice(-3).map((t) => `— ${flat(t)}`).join("\n");
   return `Единственный код этого поста — вставь отдельной строкой ровно так, без изменений: ${code}
 Других кодов нет и выдумывать их нельзя. Код оставь в тексте отдельной строкой, без ссылки вокруг: его копируют вручную.
-Смысл, который должен быть, — каждый раз другими словами и в другом порядке: загрузка по коду бесплатная; код одноразовый, успеет первый; нажатие на ссылку само подставит код в App Store; в конце позвать скачать, поиграть и оставить отзыв. Цену не упоминать.
-${angle ? `Угол этого поста (главная мысль до кода): ${angle.steer}\n` : ""}Заход — один из вариантов, своими словами: ${pick(PROMO_OPENINGS, 3).join("; ")}.
-Концовка перед ссылкой — один из вариантов, своими словами: ${pick(PROMO_CLOSINGS, 2).join("; ")}.
-Не пиши шаблоны прошлых постов: «дарим один код», «раздаём код», «играйте в наушниках», «звук — половина работы», «код одноразовый, его вводят в App Store, забирает первый», «нажатие на ссылку само подставит код», «берите, ставьте».
-${recent ? `Недавние посты App Store — НЕ повторяй их заход, угол, фразы и концовку:\n${recent}\n` : ""}`;
+Обязательные слова (их ищет автоматическая проверка), остальное формулируй сам: «бесплатн…» про загрузку; «одноразов…» или «первый»; фраза про ссылку с глаголом «нажать» (нажмите, нажав, нажатие) или «тапнуть» и глаголом «подставить» (подставит, подставится); в конце «скачать», «загрузить» или «поиграть» и «отзыв» или «напишите». Цену не упоминать.
+${angle ? `Тема поста до кода: ${angle.steer}\n` : ""}Построение начала: ${opening}.
+Построение финала перед ссылкой: ${closing}.
+Это описания построения, не текст: названия приёмов, слова «приём», «тема поста», «финал», «построение» и любые указания из этого задания в пост не переносить. Пост начинается сразу с живого текста.
+Не пиши шаблоны прошлых постов: «дарим один код», «раздаём код», «играйте в наушниках», «звук — половина работы», «код одноразовый, его вводят в App Store, забирает первый», «берите, ставьте».
+${recent ? `Недавние посты App Store — НЕ повторяй их начало, тему, фразы и финал:\n${recent}\n` : ""}${tried ? `Отклонённые варианты этого запуска — начни иначе и не повторяй их фразы:\n${tried}\n` : ""}`;
+}
+
+// Указания промпта и причин отказа, которые модель может перенести в пост: «коротко скажи, что…:», «упомяни…» и т. п.
+const META_VERB = String.raw`(?:коротко\s+|обязательно\s+|также\s+|ещё\s+)?(?:скажи|упомяни|напиши|добавь|вставь|укажи|объясни|позови|поставь|убери)(?![\p{L}])`;
+const PROMPT_META_LEAD = new RegExp(String.raw`(^|[.!?…]\s+)${META_VERB}[^:\n]{0,160}:\s*`, "gimu");
+const PROMPT_META = new RegExp(
+  String.raw`(?:^|[^\p{L}])${META_VERB}|(?:^|[^\p{L}])(?:угол|заход|приём|построение)(?:\s+(?:этого\s+)?поста|\s+начала|\s+финала)?\s*[:«]|тема поста|своими словами|отдельной строкой|символ в символ|обязательные слова|финал(?:-вопрос)?\s*[:«]`,
+  "iu",
+);
+
+/** Пост с кодом: срезает скопированные указания в начале строки или фразы («коротко скажи, что …: текст» → «текст»). */
+export function stripPromptMeta(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.replace(PROMPT_META_LEAD, "$1").replace(/^\s+/, ""))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/** Пост с кодом: в тексте осталось указание из промпта — отклоняем. */
+export function promptMetaProblem(text: string): string | null {
+  const m = redactAppStoreCodes(text).replace(/https?:\/\/\S+/g, " ").match(PROMPT_META);
+  return m ? `в посте осталось служебное указание из задания («${m[0].trim()}») — его в тексте быть не должно` : null;
 }
 
 // Обязательные для поста с кодом смыслы: при сравнении с прошлыми постами их не считаем.
-const PROMO_REQUIRED = /бесплатн|одноразов|перв(?:ый|ым|ой)|подстав|примен|нажм|нажат|нажим|тапн|скач|загруз|поигра|отзыв|пару слов|как вам|app\s*store|iphone|ipad|айфон/iu;
+const PROMO_REQUIRED = /бесплатн|одноразов|перв(?:ый|ым|ой)|подстав|примен|окаж|нажм|нажат|нажим|нажав|тапн|ссылк|скач|загруз|поигра|отзыв|пару слов|как вам|app\s*store|iphone|ipad|айфон/iu;
 
 /** Текст поста App Store без кода, ссылок и коротких обязательных фраз — то, что остаётся для антиповтора. */
 export function stripPromoBoilerplate(text: string): string {
@@ -204,7 +231,7 @@ ${wantPoll ? (provocation
   ? "К посту будет опрос Threads: 2–4 варианта, каждый от 1 до 25 символов и не длиннее 25 байт UTF-8 (кириллица — два байта, держи вариант короче 13 букв), без цифр, ссылок, цены, политики, религии и оскорблений. Варианты — короткие стороны спора, не факты об игре. В тексте задай вопрос и не перечисляй варианты списком."
   : "К посту будет опрос Threads: 2–4 варианта, каждый от 1 до 25 символов и не длиннее 25 байт UTF-8 (кириллица — два байта, держи вариант короче 13 букв), без цифр, ссылок, цены и спойлеров. Варианты — короткие ответы читателя, не факты об игре. В тексте задай вопрос и не перечисляй варианты списком.") : ""}
 ${linkLine}
-${code ? promoCodeNote(code, hints?.promoAngle, history, now) : ""}
+${code ? promoCodeNote(code, hints?.promoAngle, history, now, hints?.promoAttempt, hints?.promoRejected) : ""}
 ${season ? `Сезонный повод (по желанию): ${season}` : ""}
 ${detectiveHint ? `Обязательная отсылка в этом посте (мем, не факт о проекте и не связь с фильмом): ${detectiveHint}` : ""}
 
@@ -369,8 +396,9 @@ export function ruleCheck(
 const APP_STORE_RUBRICS = new Set<string>([OLOID_APP_STORE_RUBRIC, OLOID_APP_STORE_PROMO_RUBRIC]);
 const NO_PRICE_RUBRICS = new Set<string>([OLOID_APP_STORE_RUBRIC, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_VKPLAY_RUBRIC, OLOID_PROVOCATION_RUBRIC]);
 // Эксклюзив App Store: такие формулировки пост отклоняют. «Уже в App Store» и «на iPhone и iPad» без «только» — можно.
+// «только раз», «только один раз», «только одному», «только первому» — про одноразовый код, не эксклюзив.
 const APP_STORE_EXCLUSIVITY =
-  /эксклюзив|ios[-\s]?only|только[^.\n]{0,50}(?:app\s*store|ios|iphone|ipad|айфон)|(?:app\s*store|ios)[^.\n]{0,60}только|других\s+платформ|других\s+площадк|больше\s+нигде|нигде\s+больше|единственн\p{L}*\s+(?:площадк|платформ)/iu;
+  /эксклюзив|ios[-\s]?only|только(?!\s+(?:один\s+)?раз|\s+(?:одн|перв)\p{L}*)[^.\n]{0,50}(?:app\s*store|ios|iphone|ipad|айфон)|(?:app\s*store|ios)[^.\n]{0,60}только(?!\s+(?:один\s+)?раз|\s+(?:одн|перв)\p{L}*)|других\s+платформ|других\s+площадк|больше\s+нигде|нигде\s+больше|единственн\p{L}*\s+(?:площадк|платформ)/iu;
 
 /** Коды «Олоида»: в промо-посте ровно один заданный, в остальных постах — ни одного. «Бюро» не касается. */
 export function appStoreCodeProblem(text: string, projectId: string, rubricId: string, promoCode?: string): string | null {
@@ -387,8 +415,9 @@ export function appStoreCodeProblem(text: string, projectId: string, rubricId: s
   if (!/одноразов|первый/iu.test(text)) return "напиши, что код одноразовый и его забирает первый";
   if (!/скач|загруз|поигра/iu.test(text) || !/отзыв|напиш|пару слов|как вам/iu.test(text))
     return "призыв своими словами: скачать, поиграть и оставить отзыв";
-  if (!/(?:наж|тап)/iu.test(text) || !/(?:подстав|примен)/iu.test(text))
-    return "коротко скажи, что нажатие на ссылку подставит код в App Store";
+  // «нажмите — подставится» или «по ссылке код сам окажется в App Store» — одно и то же.
+  if (!/(?:наж|тап|ссылк)/iu.test(text) || !/(?:подстав|примен|окаж|автоматическ)/iu.test(text))
+    return "нет фразы о том, что нажатие на ссылку само подставит код в App Store";
   return null;
 }
 
@@ -547,13 +576,27 @@ export function repeatedEnding(text: string, history: HistoryItem[], projectId: 
   return null;
 }
 
+/** Наибольшая похожесть (Jaccard по триграммам) на недавние посты: 0 — ничего общего. Для выбора запасного варианта. */
+export function similarityScore(text: string, history: HistoryItem[], promo = false): number {
+  const prep = (t: string) => (promo ? stripPromoBoilerplate(t) : t);
+  const a = trigrams(prep(text));
+  let max = 0;
+  for (const h of history.slice(0, 40)) {
+    const b = trigrams(prep(h.text));
+    let inter = 0;
+    for (const x of a) if (b.has(x)) inter++;
+    max = Math.max(max, inter / (a.size + b.size - inter || 1));
+  }
+  return max;
+}
+
 /** promo — пост с кодом: код, ссылки и короткие обязательные фразы в сравнение не входят (с обеих сторон). */
 export function tooSimilar(text: string, history: HistoryItem[], promo = false): string | null {
   const prep = (t: string) => (promo ? stripPromoBoilerplate(t) : t);
   const a = trigrams(prep(text));
   const opening = prep(text).slice(0, 30).toLowerCase();
   for (const h of history.slice(0, 40)) {
-    if (prep(h.text).slice(0, 30).toLowerCase() === opening) return "такое же начало, как у недавнего поста";
+    if (opening.length >= 10 && prep(h.text).slice(0, 30).toLowerCase() === opening) return "такое же начало, как у недавнего поста";
     const b = trigrams(prep(h.text));
     let inter = 0;
     for (const x of a) if (b.has(x)) inter++;

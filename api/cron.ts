@@ -116,7 +116,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       lastAskWasPoll: rotation?.lastAskWasPoll,
       mediaUsed: rotation?.mediaUsed,
     });
-    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, lineId, tone, regularCount, mediaId, provocationFormat, provocationCount } = draft;
+    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, lineId, tone, regularCount, mediaId, provocationFormat, provocationCount, fallback } = draft;
     const where = `${channel.name} · ${project.name}`;
 
     // Ссылка VK Play ещё заглушка: пост не генерируем и не публикуем. День закрываем, чтобы следующий слот суток не пропускался тоже.
@@ -231,6 +231,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       dateHook ? `повод ${dateHook}` : "",
       devFactId ? `факт ${devFactId}` : "",
       provocationFormat ? `формат ${provocationFormat}` : "",
+      fallback ? "запасной вариант: похоже на недавние, но жёсткие проверки и фактчек пройдены" : "",
       tone === "morning" ? "утро" : tone === "evening" ? "вечер" : tone === "day" ? "день" : "",
     ].filter(Boolean);
     const mediaNote = !used ? "" : used.type === "CAROUSEL" ? ", с каруселью" : used.type === "VIDEO" ? ", с видео" : ", с картинкой";
