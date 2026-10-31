@@ -10,6 +10,9 @@ import { publishDueScheduled } from "../lib/scheduled.js";
 
 // Публикующий эндпоинт. Вызывается только Vercel Cron (заголовок Authorization: Bearer <CRON_SECRET>).
 // ?channel=<id> — аккаунт Threads из lib/channels.ts (по умолчанию pomazkof).
+// ?theme=<текст до 200 символов> — внеплановый пост «Олоида» на эту тему: обычная рубрика, заготовки, магазины,
+// провокация, коды и очередь рубрик не трогаются; пишется только история. &image=<https://… или /путь из public/> — картинка к нему.
+const SITE = "https://threads-autopost-six.vercel.app"; // public/ отдаётся с корня: public/x.png → SITE/x.png
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const secret = process.env.CRON_SECRET;
   if (!secret || req.headers.authorization !== `Bearer ${secret}`) {
@@ -28,8 +31,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const dry = req.query.dry === "1" || process.env.DRY_RUN?.trim() === "1";
   const now = new Date();
+  const theme = typeof req.query.theme === "string" ? req.query.theme.replace(/\s+/g, " ").trim().slice(0, 200) : "";
+  const imageParam = typeof req.query.image === "string" ? req.query.image.trim() : "";
+  if (theme && !channel.projects.includes("oloid")) return res.status(400).json({ error: "theme — только для аккаунта «Олоида»" });
+  if (imageParam && !theme) return res.status(400).json({ error: "image — только вместе с theme" });
+  const image = /^https:\/\/\S+$/.test(imageParam)
+    ? imageParam
+    : /^\/[\w\-./]+$/.test(imageParam) && !imageParam.includes("..")
+      ? `${SITE}${imageParam}`
+      : undefined;
+  if (imageParam && !image) return res.status(400).json({ error: "image — https-адрес или путь от корня сайта, например /halloween.png" });
+  const themeLine = theme ? `\nВнеплановый пост, тема: ${theme}${image ? `\nКартинка: ${image}` : ""}` : "";
   try {
-    const scheduled = await publishDueScheduled(channel, now, dry);
+    // Внеплановый пост заготовку не забирает: она выйдет в свой слот.
+    const scheduled = theme ? { kind: "none" as const } : await publishDueScheduled(channel, now, dry);
     if (scheduled.kind !== "none") {
       const id = scheduled.post.id;
       if (scheduled.kind === "dry") {
@@ -100,7 +115,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       channel,
       history,
       lastProject: await getLastProject(channel),
-      forcedProject: typeof req.query.project === "string" ? req.query.project : undefined,
+      forcedProject: theme ? "oloid" : typeof req.query.project === "string" ? req.query.project : undefined,
+      extraTheme: theme || undefined,
+      extraImage: image,
       now,
       dailyDoneDate,
       secondDailyDoneDate,
@@ -129,7 +146,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (!text) {
-      if (!dry) await notify(`⚠️ Threads-бот (${where}): ни один вариант не прошёл проверки, пост пропущен.\n\n${rejected.join("\n\n")}`);
+      if (!dry) await notify(`⚠️ Threads-бот (${where}): ни один вариант не прошёл проверки, пост пропущен.${themeLine}\n\n${rejected.join("\n\n")}`);
       return res.json({ posted: false, channel: channel.id, project: project.id, rejected });
     }
     if (dry) {
@@ -149,6 +166,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         dateHook,
         devFactId,
         tone,
+        theme: theme || undefined,
         text,
         rejected,
       });
@@ -190,7 +208,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Код списывается только здесь: после успешного publishPost. Превью, dry и сбой публикации сюда не доходят.
     if (promoCode) await markAppStoreCodeUsed(project.id, promoCode);
     const pollOptions = poll && !pollDropped ? [poll.option_a, poll.option_b, poll.option_c, poll.option_d].filter((option): option is string => Boolean(option)) : undefined;
-    if (isOloidRotationRubric(rubricId)) {
+    // Внеплановый пост очередь обычных рубрик, счётчик тихих постов и повод дня не двигает.
+    if (isOloidRotationRubric(rubricId) && !theme) {
       await saveOloidRotation(project.id, {
         rubricId,
         at: now.toISOString(),
@@ -222,7 +241,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       mediaId: used ? mediaId : undefined,
       provocationFormat,
     });
-    await setLastProject(channel, project.id);
+    if (!theme) await setLastProject(channel, project.id);
     const promoLine = promoCode != null ? `\nПромокод: ${promoCode}. Осталось: ${promoLeft ?? 0}` : "";
     const marks = [
       quiet ? "без ссылки" : "",
@@ -235,8 +254,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       tone === "morning" ? "утро" : tone === "evening" ? "вечер" : tone === "day" ? "день" : "",
     ].filter(Boolean);
     const mediaNote = !used ? "" : used.type === "CAROUSEL" ? ", с каруселью" : used.type === "VIDEO" ? ", с видео" : ", с картинкой";
-    await notify(`✅ Опубликовано (${where}, ${rubricId}${mediaNote}${marks.length ? `, ${marks.join(", ")}` : ""}):${topic ? `\nТема: ${topic}` : ""}${topicTag ? `\nТема Threads: ${topicTag}` : ""}${promoLine}\n\n${text}`);
-    return res.json({ posted: true, channel: channel.id, project: project.id, rubric: rubricId, topic, media: used?.type === "CAROUSEL" ? used.urls : used?.url, mediaId: used ? mediaId : undefined, promoCode, promoLeft, quiet, poll: pollOptions, pollDropped, pollError, dateHook, devFactId, provocationFormat, tone, postId, text });
+    await notify(`✅ Опубликовано (${where}, ${rubricId}${mediaNote}${marks.length ? `, ${marks.join(", ")}` : ""}):${themeLine}${topic && !theme ? `\nТема: ${topic}` : ""}${topicTag ? `\nТема Threads: ${topicTag}` : ""}${promoLine}\n\n${text}`);
+    return res.json({ posted: true, channel: channel.id, project: project.id, rubric: rubricId, topic, media: used?.type === "CAROUSEL" ? used.urls : used?.url, mediaId: used ? mediaId : undefined, promoCode, promoLeft, quiet, poll: pollOptions, pollDropped, pollError, dateHook, devFactId, provocationFormat, tone, theme: theme || undefined, postId, text });
   } catch (e: any) {
     console.error(e);
     await notify(`❌ Threads-бот упал (${channel.name}): ${e?.message ?? e}`);
