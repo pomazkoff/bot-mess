@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { appStorePromoOpen, makeDraft, mskDay } from "../lib/run.js";
-import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_VKPLAY_RUBRIC } from "../lib/projects.js";
+import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_SITE_URL, OLOID_VKPLAY_RUBRIC, OLOID_VKPLAY_URL } from "../lib/projects.js";
 import { postAlreadyPublished, publishPost } from "../lib/threads.js";
 import { OLOID_ASK_RUBRIC, isOloidRotationRubric } from "../lib/oloidRotation.js";
 import { getAppStoreCodesUsed, getAppStoreDay, getHistory, getLastProject, getOloidRotationState, getProvocationDay, getProvocationState, getVkPlayDay, markAppStoreCodeUsed, pushHistory, saveOloidRotation, saveProvocation, setAppStoreDay, setLastProject, setProvocationDay, setVkPlayDay } from "../lib/store.js";
@@ -12,6 +12,8 @@ import { publishDueScheduled } from "../lib/scheduled.js";
 // ?channel=<id> — аккаунт Threads из lib/channels.ts (по умолчанию pomazkof).
 // ?theme=<текст до 200 символов> — внеплановый пост «Олоида» на эту тему: обычная рубрика, заготовки, магазины,
 // провокация, коды и очередь рубрик не трогаются; пишется только история. &image=<https://… или /путь из public/> — картинка к нему.
+// &link=<OLOID_VKPLAY_URL или сайт> — единственная ссылка поста вместо utm-ссылки сайта (другие адреса игнорируются).
+// &code=<A-Z0-9, 6–40> — код, который пост обязан содержать дословно, заглавными. link и code работают только вместе с theme.
 const SITE = "https://threads-autopost-six.vercel.app"; // public/ отдаётся с корня: public/x.png → SITE/x.png
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const secret = process.env.CRON_SECRET;
@@ -41,6 +43,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? `${SITE}${imageParam}`
       : undefined;
   if (imageParam && !image) return res.status(400).json({ error: "image — https-адрес или путь от корня сайта, например /halloween.png" });
+  const linkParam = typeof req.query.link === "string" ? req.query.link.trim() : "";
+  const extraLink = theme && [OLOID_VKPLAY_URL, OLOID_SITE_URL].includes(linkParam) ? linkParam : undefined;
+  const codeParam = typeof req.query.code === "string" ? req.query.code.trim() : "";
+  const extraCode = theme && /^[A-Z0-9]{6,40}$/.test(codeParam) ? codeParam : undefined;
   const themeLine = theme ? `\nВнеплановый пост, тема: ${theme}${image ? `\nКартинка: ${image}` : ""}` : "";
   try {
     // Внеплановый пост заготовку не забирает: она выйдет в свой слот.
@@ -118,6 +124,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       forcedProject: theme ? "oloid" : typeof req.query.project === "string" ? req.query.project : undefined,
       extraTheme: theme || undefined,
       extraImage: image,
+      extraLink,
+      extraCode,
       now,
       dailyDoneDate,
       secondDailyDoneDate,
@@ -167,6 +175,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         devFactId,
         tone,
         theme: theme || undefined,
+        link: extraLink,
+        code: extraCode,
         text,
         rejected,
       });
