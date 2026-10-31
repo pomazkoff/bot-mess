@@ -1,5 +1,5 @@
 import { OLOID_DEV_NUMBER_FACTS, OLOID_DEV_NUMBERS_RUBRIC } from "./devFacts.js";
-import { appStoreCodeProblem, appStoreMomentProblem, appStorePriceProblem, detectiveRefProblem, draftPost, pickPromoAngle, promptMetaProblem, repeatedEnding, ruleCheck, similarityScore, stripPromptMeta, tooSimilar, vkPlayProblem, factCheck, type PromoAngle } from "./generate.js";
+import { appStoreCodeProblem, appStoreMomentProblem, appStorePriceProblem, detectiveRefProblem, draftPost, pickPromoAngle, promptMetaProblem, repeatedEnding, ruleCheck, similarityScore, stripPromptMeta, tooSimilar, extraCodeProblem, stripExtraCode, vkPlayProblem, factCheck, type PromoAngle } from "./generate.js";
 import { oloidRepeatProblem, spatulaProblem, topicRepeatsRecent } from "./oloidFacts.js";
 import {
   OLOID_ASK_RUBRIC,
@@ -350,6 +350,10 @@ export async function makeDraft(opts: {
   extraTheme?: string;
   /** Картинка к внеплановому посту (абсолютный https-адрес) вместо автоподбора. */
   extraImage?: string;
+  /** Единственная ссылка внепланового поста вместо utm-ссылки сайта (cron уже проверил белый список). */
+  extraLink?: string;
+  /** Код, который внеплановый пост содержит дословно, заглавными. */
+  extraCode?: string;
 }): Promise<Draft> {
   const {
     channel,
@@ -394,6 +398,8 @@ export async function makeDraft(opts: {
   );
   // Внеплановый пост: только «Олоид», обычная рубрика без опроса, реплики и цифр — та, что дольше не выходила.
   const extraTheme = project.id === "oloid" ? opts.extraTheme : undefined;
+  const extraLink = extraTheme ? opts.extraLink : undefined;
+  const extraCode = extraTheme ? opts.extraCode : undefined;
   const themeRubrics = project.rubrics.filter((r) => (THEME_RUBRICS as readonly string[]).includes(r.id));
   const rubric = extraTheme && themeRubrics.length
     ? pickLeastRecent(themeRubrics, rubricLastUsed)
@@ -511,6 +517,8 @@ export async function makeDraft(opts: {
     provocation,
     formatNote: provocationFormat?.steer,
     extraTheme,
+    extraLink,
+    extraCode,
     promoAngle,
     promoAttempt: 0,
     promoRejected: [] as string[],
@@ -536,9 +544,14 @@ export async function makeDraft(opts: {
     // Пост с кодом: скопированные указания задания («коротко скажи, что…:») срезаем до проверок.
     const candidate = isPromo ? stripPromptMeta(drafted.text) : drafted.text;
     const withOptions = [candidate, ...(drafted.options ?? [])].join("\n");
-    const check = () => factCheck(candidate, project, shown?.note ?? picture?.about, now, { rubricId: rubric.id, promoCode, devFact: devFact?.text, quiet, promoAngle });
+    const check = () => factCheck(candidate, project, shown?.note ?? picture?.about, now, { rubricId: rubric.id, promoCode, devFact: devFact?.text, quiet, promoAngle, extraLink, extraCode });
+    // Заданный код в антиповтор не входит (ни в посте, ни в истории): совпадение по коду — не повтор.
+    const simText = extraCode ? stripExtraCode(candidate, extraCode) : candidate;
+    const simWithOptions = extraCode ? stripExtraCode(withOptions, extraCode) : withOptions;
+    const simHistory = extraCode ? history.map((h) => ({ ...h, text: stripExtraCode(h.text, extraCode) })) : history;
     const hard =
-      ruleCheck(candidate, project, now, rubric, linkContent, promoCode, quiet, devFact?.text) ??
+      ruleCheck(candidate, project, now, rubric, linkContent, promoCode, quiet, devFact?.text, extraLink) ??
+      (extraCode ? extraCodeProblem(candidate, extraCode) : null) ??
       (project.id === "oloid" ? spatulaProblem(withOptions) : null) ??
       appStoreCodeProblem(candidate, project.id, rubric.id, promoCode) ??
       appStorePriceProblem(candidate, project.id, rubric.id) ??
@@ -548,9 +561,9 @@ export async function makeDraft(opts: {
       (detective ? detectiveRefProblem(candidate, history, detective) : null);
     const soft = hard
       ? null
-      : repeatedEnding(candidate, history, project.id) ??
-        tooSimilar(candidate, history, isPromo) ??
-        (project.id === "oloid" ? oloidRepeatProblem(withOptions, history, now) : null);
+      : repeatedEnding(simText, simHistory, project.id) ??
+        tooSimilar(simText, simHistory, isPromo) ??
+        (project.id === "oloid" ? oloidRepeatProblem(simWithOptions, simHistory, now) : null);
     let problem = hard ?? soft;
     if (!problem) {
       problem = await check();

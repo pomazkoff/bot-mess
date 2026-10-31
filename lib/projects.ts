@@ -82,6 +82,8 @@ export const OLOID_APP_STORE_PROMO_RUBRIC = "appstore-promo";
 // Страница «Олоида» на VK Play. Других копий адреса нет.
 // Если в константу снова попадёт TODO, крон пост этой рубрики не публикует.
 export const OLOID_VKPLAY_URL = "https://vkplay.ru/play/game/oloid-50004";
+/** Сайт «Олоида» без UTM. Обычные посты ставят его с UTM через project.link. */
+export const OLOID_SITE_URL = "https://oloid-game.ru/";
 export const OLOID_VKPLAY_RUBRIC = "vkplay";
 /** Первый календарный день МСК, когда автоматический пост VK Play вообще возможен. До этой даты слота нет. */
 export const OLOID_VKPLAY_FROM = "2026-10-23";
@@ -391,7 +393,7 @@ export const PROJECTS: Project[] = [
     id: "oloid",
     name: "Олоид",
     // Страница Steam пока не публичная — ведём на лендинг игры
-    link: (d, c) => utm("https://oloid-game.ru/", d, c),
+    link: (d, c) => utm(OLOID_SITE_URL, d, c),
     requireLink: true,
     topicTags: ["Визуальные новеллы", "Инди-игры", "Петербург", "Детективы"],
     // Голос (2026-10-07, Илья и SMM; 2026-10-09 — короткие абзацы, пустая строка между ними): строчные, короткий заход, потом одна деталь

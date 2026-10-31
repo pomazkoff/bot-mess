@@ -43,7 +43,24 @@ export type DraftHints = {
   promoAttempt?: number; // номер попытки appstore-promo: у каждой свой приём начала и финала
   promoRejected?: string[]; // отклонённые варианты этого запуска — не повторять
   extraTheme?: string; // внеплановый пост «Олоида» на заданную тему (/api/cron?theme=…)
+  extraLink?: string; // единственная ссылка внепланового поста вместо utm-ссылки (/api/cron?link=…)
+  extraCode?: string; // код, который внеплановый пост содержит дословно, заглавными (/api/cron?code=…)
 };
+
+/** Внеплановый пост с заданным кодом: код должен стоять ровно так, заглавными. */
+export function extraCodeProblem(text: string, code: string): string | null {
+  return text.includes(code) ? null : `нет кода ${code} — вставь его ровно так, заглавными, без изменений`;
+}
+
+/** Любое написание кода (без учёта регистра) — ровно заданный код. */
+export function restoreExtraCode(text: string, code: string): string {
+  return text.replace(new RegExp(code, "gi"), code);
+}
+
+/** Текст без заданного кода — для антиповтора. */
+export function stripExtraCode(text: string, code: string): string {
+  return text.replace(new RegExp(code, "gi"), " ");
+}
 
 // ---------- appstore-promo: углы, заходы, концовки ----------
 
@@ -177,7 +194,7 @@ export async function draftPost(
 ): Promise<{ text: string; options?: string[] }> {
   // Код и redeem-ссылка — только у appstore-promo. В остальные рубрики код не попадает, даже если его передали.
   const code = rubric.id === OLOID_APP_STORE_PROMO_RUBRIC ? promoCode : undefined;
-  const link = code ? oloidRedeemUrl(code) : (rubric.link ?? p.link)(now, linkContent);
+  const link = code ? oloidRedeemUrl(code) : hints?.extraLink ?? (rubric.link ?? p.link)(now, linkContent);
   const recent = history
     .filter((h) => h.project === p.id)
     .slice(0, 12)
@@ -225,6 +242,8 @@ ${factPack ? oloidColorSteer(factPack.color, rubric.id) : ""}${factPack ? recent
 ${hints?.formatNote ? `Формат этого поста: ${hints.formatNote}` : ""}
 ${hints?.toneNote ? `Тон слота: ${hints.toneNote}` : ""}
 ${hints?.extraTheme ? `Тема этого внепланового поста: ${hints.extraTheme}; свяжи её с фактами об игре, ничего не выдумывай.` : ""}
+${hints?.extraCode ? `Обязательно вставь в пост код ровно так, заглавными, без изменений и без ссылки вокруг: ${hints.extraCode}` : ""}
+${hints?.extraLink ? `Единственная ссылка этого поста — ${hints.extraLink}, отдельным абзацем в конце. Других ссылок и адресов не ставь.` : ""}
 ${hints?.dateSteer ? `Повод дня (одна обычная публикация, без новых фактов): ${hints.dateSteer}` : ""}
 ${hints?.devFact ? `ЕДИНСТВЕННЫЙ числовой факт этого поста. Другие числа из фактов проекта не копируй:\n• ${hints.devFact}` : ""}
 ${hints?.characterLine ? `Единственная допустимая реплика, дословно и в кавычках: ${hints.characterLine}` : ""}
@@ -262,7 +281,9 @@ ${feedback ? `\nПредыдущий вариант отклонён: ${feedback
   const trimmed = parsed.text.trim();
   // Формат — до ruleCheck: пустые строки входят в лимит 450.
   // Сначала вёрстка (края строк), потом строчные: заглавная должна стоять в начале строки, а не после пробелов.
-  const text = p.id === "oloid" ? lowercaseSentenceStarts(normalizeOloidParagraphs(trimmed)) : trimmed;
+  const formatted = p.id === "oloid" ? lowercaseSentenceStarts(normalizeOloidParagraphs(trimmed)) : trimmed;
+  // Строчный стиль не трогает заданный код: возвращаем его ровно в исходном виде.
+  const text = hints?.extraCode ? restoreExtraCode(formatted, hints.extraCode) : formatted;
   const options = wantPoll ? parsed.options?.map((option) => option.trim()).filter(Boolean) : undefined;
   return { text, options };
 }
@@ -351,6 +372,7 @@ export function ruleCheck(
   promoCode?: string,
   quiet = false,
   devFact?: string,
+  extraLink?: string, // внеплановый пост: единственная разрешённая ссылка вместо utm-ссылки
 ): string | null {
   if (!text) return "пустой текст";
   if (p.id === "oloid") {
@@ -389,8 +411,9 @@ export function ruleCheck(
   const allowed =
     rubric?.id === OLOID_APP_STORE_PROMO_RUBRIC && promoCode
       ? oloidRedeemUrl(promoCode)
-      : (rubric?.link ?? p.link)(now, linkContent);
+      : extraLink ?? (rubric?.link ?? p.link)(now, linkContent);
   if (urls.some((u) => u.replace(/[.,)]+$/, "") !== allowed)) return `посторонняя или искажённая ссылка — вставь ровно эту: ${allowed}`;
+  if (extraLink && urls.length !== 1) return `ссылка должна быть ровно одна: ${extraLink}`;
   if (p.requireLink && urls.length === 0) return "нет обязательной ссылки";
   return null;
 }
@@ -671,11 +694,14 @@ export async function factCheck(
   p: Project,
   pictureNote?: string,
   now = new Date(),
-  opts?: { rubricId?: string; promoCode?: string; devFact?: string; quiet?: boolean; promoAngle?: PromoAngle },
+  opts?: { rubricId?: string; promoCode?: string; devFact?: string; quiet?: boolean; promoAngle?: PromoAngle; extraLink?: string; extraCode?: string },
 ): Promise<string | null> {
+  const extraNote =
+    (opts?.extraLink ? `Ссылка ${opts.extraLink} задана автором поста — официальная страница «Олоида», не отклоняй из-за неё и из-за отсутствия UTM.\n` : "") +
+    (opts?.extraCode ? `Код ${opts.extraCode} задан автором поста — настоящий код, не отклоняй из-за него, его написания заглавными и упоминания кода.\n` : "");
   const r = await askJson<{ ok: boolean; reason: string }>(
     `Ты строгий редактор-фактчекер. Проверь пост о проекте «${p.name}».
-${p.id === "oloid" ? oloidCheckNote(opts?.rubricId, now) : ""}${rotationFactNote(opts?.rubricId, opts?.devFact, opts?.quiet)}${provocationFactNote(opts?.rubricId, opts?.quiet)}${appStoreFactNote(opts?.rubricId, opts?.promoCode, opts?.promoAngle)}${vkPlayFactNote(opts?.rubricId)}${p.id === "buro" ? `Отсылки к детективам — стиль и шутка, не факты о проекте. Допустимы только эти якоря, каждый своим героем:\n${BURO_DETECTIVE_REFS.map((ref) => `• ${ref.hint}`).join("\n")}\nНе отклоняй такую шутку, если она узнаваемая и не приписана чужому персонажу. Отклоняй, если пост утверждает, что сервис основан на фильме, снят по нему или связан с правообладателем, если цитата приписана не тому герою, если раскрыта развязка или описана жестокость, или если шутка непристойная.\n` : ""}Допустимые факты:
+${p.id === "oloid" ? oloidCheckNote(opts?.rubricId, now) : ""}${extraNote}${rotationFactNote(opts?.rubricId, opts?.devFact, opts?.quiet)}${provocationFactNote(opts?.rubricId, opts?.quiet)}${appStoreFactNote(opts?.rubricId, opts?.promoCode, opts?.promoAngle)}${vkPlayFactNote(opts?.rubricId)}${p.id === "buro" ? `Отсылки к детективам — стиль и шутка, не факты о проекте. Допустимы только эти якоря, каждый своим героем:\n${BURO_DETECTIVE_REFS.map((ref) => `• ${ref.hint}`).join("\n")}\nНе отклоняй такую шутку, если она узнаваемая и не приписана чужому персонажу. Отклоняй, если пост утверждает, что сервис основан на фильме, снят по нему или связан с правообладателем, если цитата приписана не тому герою, если раскрыта развязка или описана жестокость, или если шутка непристойная.\n` : ""}Допустимые факты:
 ${[...factsFor(p, now, opts?.rubricId), ...(opts?.promoCode && opts.promoAngle?.fact ? [opts.promoAngle.fact] : [])].map((f) => `• ${f}`).join("\n")}
 Запрещено:
 ${forbiddenFor(p, opts?.rubricId, now).map((f) => `• ${f}`).join("\n")}
