@@ -31,6 +31,8 @@ import type { Channel } from "./channels.js";
 import { pickRegularShown } from "./variety.js";
 
 const MAX_ATTEMPTS = 3;
+// Рубрики внепланового поста на тему (/api/cron?theme=…): без опроса (ask), реплики (line) и цифр (dev-numbers).
+const THEME_RUBRICS = ["detail", "backstage", "petersburg"] as const;
 // Пост с кодом: запасной вариант (все попытки упёрлись в похожесть) — только если Jaccard с недавними ниже этого (обычный порог 0.45).
 const PROMO_FALLBACK_MAX_SIMILARITY = 0.8;
 
@@ -344,6 +346,10 @@ export async function makeDraft(opts: {
   dateHooks?: Record<string, string>;
   lastAskWasPoll?: boolean | null;
   mediaUsed?: Record<string, string>;
+  /** Внеплановый пост «Олоида» на свободную тему: обычная рубрика, без магазинов, провокации и повода дня. */
+  extraTheme?: string;
+  /** Картинка к внеплановому посту (абсолютный https-адрес) вместо автоподбора. */
+  extraImage?: string;
 }): Promise<Draft> {
   const {
     channel,
@@ -366,6 +372,7 @@ export async function makeDraft(opts: {
     dateHooks = {},
     lastAskWasPoll = null,
     mediaUsed = {},
+    extraImage,
   } = opts;
   const project = pickProject(channel, lastProject, forcedProject);
 
@@ -385,13 +392,18 @@ export async function makeDraft(opts: {
     rubricUsed,
     projectHistory.map((item) => ({ id: item.rubric, at: item.at })),
   );
-  const rubric = pickRubric(project, own, now, forcedRubric, history, dailyDoneDate, promoScheduled && nextCode != null, secondDailyDoneDate, {
-    lastUsed: rubricLastUsed,
-    preferRegular: dateHookDue != null,
-  }, provocationDoneDate);
+  // Внеплановый пост: только «Олоид», обычная рубрика без опроса, реплики и цифр — та, что дольше не выходила.
+  const extraTheme = project.id === "oloid" ? opts.extraTheme : undefined;
+  const themeRubrics = project.rubrics.filter((r) => (THEME_RUBRICS as readonly string[]).includes(r.id));
+  const rubric = extraTheme && themeRubrics.length
+    ? pickLeastRecent(themeRubrics, rubricLastUsed)
+    : pickRubric(project, own, now, forcedRubric, history, dailyDoneDate, promoScheduled && nextCode != null, secondDailyDoneDate, {
+        lastUsed: rubricLastUsed,
+        preferRegular: dateHookDue != null,
+      }, provocationDoneDate);
   const wanted = forcedTopic?.toLowerCase();
   const blockTopic = project.id === "oloid" ? (item: string) => topicRepeatsRecent(item, projectHistory, now) : undefined;
-  let topic = (wanted && rubric.topics?.find((t) => t.toLowerCase().includes(wanted))) || pickTopic(rubric, history, blockTopic);
+  let topic = extraTheme || (wanted && rubric.topics?.find((t) => t.toLowerCase().includes(wanted))) || pickTopic(rubric, history, blockTopic);
   let linkContent = `${channel.id}-${rubric.id}`;
   const topicTag = pickTopicTag(project, rubric, history);
   const regularCount = storedRegularCount ?? countRegularPosts(projectHistory);
@@ -413,9 +425,9 @@ export async function makeDraft(opts: {
     linkContent = `provocation-${provocationFormat.id}`;
   }
   const withProvocationLink = provocation && provocationHasLink(provocationCount);
-  const quiet = (rotation && regularPostIsQuiet(regularCount)) || (provocation && !withProvocationLink);
+  const quiet = !extraTheme && ((rotation && regularPostIsQuiet(regularCount)) || (provocation && !withProvocationLink));
   const tone = project.id === "oloid" ? oloidSlotTone(mskHour(now)) : undefined;
-  const dateHook = rotation ? dateHookDue : null;
+  const dateHook = rotation && !extraTheme ? dateHookDue : null;
 
   if (rubric.id === OLOID_LINE_RUBRIC) {
     const line = pickCharacterLine(mergeLastUsed(lineUsed, projectHistory.map((item) => ({ id: item.lineId, at: item.at }))));
@@ -448,15 +460,17 @@ export async function makeDraft(opts: {
   const askWasPoll = lastAskWasPoll ?? (askFromHistory ? askFromHistory.poll === true : null);
   const wantPoll = provocation ? provocationWantsPoll(provocationCount) : rubric.id === OLOID_ASK_RUBRIC && askWasPoll !== true;
   const shown =
-    rotation && !wantPoll && !rubric.media
+    rotation && !wantPoll && !rubric.media && !extraImage
       ? pickRegularShown(
           rubric.id,
           topic,
           mergeLastUsed(mediaUsed, projectHistory.map((item) => ({ id: item.mediaId, at: item.at }))),
         )
       : null;
-  const picture = rubric.media || wantPoll || shown ? undefined : pickPicture(project, rubric, topic, history);
-  const media: Media | undefined = rubric.media ?? shown?.media ?? (picture && { type: "IMAGE", url: picture.url });
+  const picture = rubric.media || wantPoll || shown || extraImage ? undefined : pickPicture(project, rubric, topic, history);
+  const media: Media | undefined = extraImage
+    ? { type: "IMAGE", url: extraImage, droppable: true }
+    : rubric.media ?? shown?.media ?? (picture && { type: "IMAGE", url: picture.url });
   const detective = project.id === "buro" ? pickDetectiveRef(history, project.forceNextRef) : undefined;
   const promoCode = promoCodeForRubric(rubric.id, nextCode, promoScheduled, forcedRubric);
   const promoLeft = promoCode ? OLOID_APP_STORE_CODES.length - spent.length - 1 : undefined;
@@ -496,6 +510,7 @@ export async function makeDraft(opts: {
     shownNote: shown?.note,
     provocation,
     formatNote: provocationFormat?.steer,
+    extraTheme,
     promoAngle,
     promoAttempt: 0,
     promoRejected: [] as string[],

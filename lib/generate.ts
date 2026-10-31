@@ -42,6 +42,7 @@ export type DraftHints = {
   promoAngle?: PromoAngle; // угол поста appstore-promo (pickPromoAngle)
   promoAttempt?: number; // номер попытки appstore-promo: у каждой свой приём начала и финала
   promoRejected?: string[]; // отклонённые варианты этого запуска — не повторять
+  extraTheme?: string; // внеплановый пост «Олоида» на заданную тему (/api/cron?theme=…)
 };
 
 // ---------- appstore-promo: углы, заходы, концовки ----------
@@ -223,6 +224,7 @@ ${topic ? `Тема поста: ${topic}` : ""}
 ${factPack ? oloidColorSteer(factPack.color, rubric.id) : ""}${factPack ? recentDetailNote(history) : ""}
 ${hints?.formatNote ? `Формат этого поста: ${hints.formatNote}` : ""}
 ${hints?.toneNote ? `Тон слота: ${hints.toneNote}` : ""}
+${hints?.extraTheme ? `Тема этого внепланового поста: ${hints.extraTheme}; свяжи её с фактами об игре, ничего не выдумывай.` : ""}
 ${hints?.dateSteer ? `Повод дня (одна обычная публикация, без новых фактов): ${hints.dateSteer}` : ""}
 ${hints?.devFact ? `ЕДИНСТВЕННЫЙ числовой факт этого поста. Другие числа из фактов проекта не копируй:\n• ${hints.devFact}` : ""}
 ${hints?.characterLine ? `Единственная допустимая реплика, дословно и в кавычках: ${hints.characterLine}` : ""}
