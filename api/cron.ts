@@ -141,7 +141,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       lastAskWasPoll: rotation?.lastAskWasPoll,
       mediaUsed: rotation?.mediaUsed,
     });
-    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, lineId, tone, regularCount, mediaId, provocationFormat, provocationCount, fallback } = draft;
+    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, lineId, tone, regularCount, mediaId, provocationFormat, provocationCount, fallback, factIds, vkAngle } = draft;
     const where = `${channel.name} · ${project.name}`;
 
     // Ссылка VK Play ещё заглушка: пост не генерируем и не публикуем. День закрываем, чтобы следующий слот суток не пропускался тоже.
@@ -250,6 +250,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       lineId,
       mediaId: used ? mediaId : undefined,
       provocationFormat,
+      factIds,
+      vkAngle,
     });
     if (!theme) await setLastProject(channel, project.id);
     const promoLine = promoCode != null ? `\nПромокод: ${promoCode}. Осталось: ${promoLeft ?? 0}` : "";
