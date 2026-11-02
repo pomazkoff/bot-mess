@@ -387,7 +387,7 @@ for (const fact of passport) {
   assert.ok(OLOID_ROTATING_FACTS.filter((spec) => fact.includes(spec.needle)).length <= 1, fact.slice(0, 48));
 }
 const rotatingInOrder = passport.filter((fact) => OLOID_ROTATING_FACTS.some((spec) => fact.includes(spec.needle)));
-const freshPack = oloidPromptFacts(passport, [], slot1730, { rubricId: "backstage" });
+const freshPack = oloidPromptFacts(passport, [], slot1730, { rubricId: "backstage", random: () => 0 });
 assert.deepEqual(freshPack.color, rotatingInOrder.slice(0, OLOID_COLOR_FACTS_PER_POST));
 assert.ok(freshPack.facts.some((fact) => fact.includes("Санкт-Петербурге")));
 for (const fact of freshPack.color) assert.ok(freshPack.facts.includes(fact));
@@ -398,7 +398,7 @@ const cooledTable: HistoryItem = {
   text: "мини-игра: стол рывками",
   at: new Date(slot1730.getTime() - 24 * 60 * 60 * 1000).toISOString(),
 };
-const cooledPack = oloidPromptFacts(passport, [cooledTable], slot1730, { rubricId: "appstore" });
+const cooledPack = oloidPromptFacts(passport, [cooledTable], slot1730, { rubricId: "appstore", random: () => 0 });
 assert.equal(cooledPack.color.some((fact) => fact.includes("стол рывками")), false);
 assert.deepEqual(cooledPack.color, [...rotatingInOrder.slice(1, OLOID_COLOR_FACTS_PER_POST), rotatingInOrder[OLOID_COLOR_FACTS_PER_POST]]);
 

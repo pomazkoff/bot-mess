@@ -82,8 +82,11 @@ export type RotatingFact = {
   label: string;
   /** Уникальный фрагмент строки в facts. Один факт — одна игла. */
   needle: string;
-  /** След в уже вышедшем посте: по нему факт считается использованным. */
-  mark: RegExp;
+  /** След в уже вышедшем посте: по нему факт считается использованным (и для старых записей без factIds).
+   *  Нет поля — факт отслеживается только по id в HistoryItem.factIds. */
+  mark?: RegExp;
+  /** Тема рубрики, которой этот факт нужен: при такой теме факт кладётся в промпт вне очереди. */
+  topicMark?: RegExp;
 };
 
 /**
@@ -116,90 +119,76 @@ export const OLOID_ROTATING_FACTS: readonly RotatingFact[] = [
   { id: "plywood", label: "фанера протяжкой", needle: "Мини-игру с фанерой", mark: /фанер/iu },
   { id: "unnoticed", label: "мелочи кадра", needle: "Мелочи, которые игрок", mark: /точки осмотра пульсируют|танчик/iu },
   { id: "harder", label: "сложнее, чем думали", needle: "Сложнее, чем думали", mark: /тестер провёл|1500 дубл/iu },
-  // Хвост отфильтрованного списка: та же очередь, отдельные иглы.
-  { id: "extra-01", label: 'Пять раз', needle: 'Пять раз', mark: /Пять раз/iu },
-  { id: "extra-02", label: 'Статья г', needle: 'Статья г', mark: /Статья г/iu },
-  { id: "extra-03", label: 'Непрочит', needle: 'Непрочит', mark: /Непрочит/iu },
-  { id: "extra-04", label: 'Открытые', needle: 'Открытые', mark: /Открытые/iu },
-  { id: "extra-05", label: 'ссарии р', needle: 'ссарии р', mark: /ссарии р/iu },
-  { id: "extra-06", label: 'сария «Г', needle: 'сария «Г', mark: /сария «Г/iu },
-  { id: "extra-07", label: 'ь статьи', needle: 'ь статьи', mark: /ь статьи/iu },
-  { id: "extra-08", label: 'статья «', needle: 'статья «', mark: /статья «/iu },
-  { id: "extra-09", label: 'статья п', needle: 'статья п', mark: /статья п/iu },
-  { id: "extra-10", label: 'сария «К', needle: 'сария «К', mark: /сария «К/iu },
-  { id: "extra-11", label: 'У «Танчи', needle: 'У «Танчи', mark: /У «Танчи/iu },
-  { id: "extra-12", label: 'сария «Р', needle: 'сария «Р', mark: /сария «Р/iu },
-  { id: "extra-13", label: 'татья «Л', needle: 'татья «Л', mark: /татья «Л/iu },
-  { id: "extra-14", label: 'Есть пол', needle: 'Есть пол', mark: /Есть пол/iu },
-  { id: "extra-15", label: 'Двор-кол', needle: 'Двор-кол', mark: /Двор-кол/iu },
-  { id: "extra-16", label: 'Дом в иг', needle: 'Дом в иг', mark: /Дом в иг/iu },
-  { id: "extra-17", label: 'Адрес в ', needle: 'Адрес в ', mark: /Адрес в /iu },
-  { id: "extra-18", label: 'Рюмочная', needle: 'Рюмочная', mark: /Рюмочная/iu },
-  { id: "extra-19", label: 'е есть н', needle: 'е есть н', mark: /е есть н/iu },
-  { id: "extra-20", label: 'артира А', needle: 'артира А', mark: /артира А/iu },
-  { id: "extra-21", label: 'Кабинет ', needle: 'Кабинет ', mark: /Кабинет /iu },
-  { id: "extra-22", label: 'Коридор ', needle: 'Коридор ', mark: /Коридор /iu },
-  { id: "extra-23", label: 'Пыль в в', needle: 'Пыль в в', mark: /Пыль в в/iu },
-  { id: "extra-24", label: 'Салон ма', needle: 'Салон ма', mark: /Салон ма/iu },
-  { id: "extra-25", label: 'Ёлочка-а', needle: 'Ёлочка-а', mark: /Ёлочка-а/iu },
-  { id: "extra-26", label: 'Оживший ', needle: 'Оживший ', mark: /Оживший /iu },
-  { id: "extra-27", label: 'Радио в ', needle: 'Радио в ', mark: /Радио в /iu },
-  { id: "extra-28", label: 'Шагов в ', needle: 'Шагов в ', mark: /Шагов в /iu },
-  { id: "extra-29", label: 'За окном', needle: 'За окном', mark: /За окном/iu },
-  { id: "extra-30", label: 'Пение пт', needle: 'Пение пт', mark: /Пение пт/iu },
-  { id: "extra-31", label: 'Для танч', needle: 'Для танч', mark: /Для танч/iu },
-  { id: "extra-32", label: 'Пенальти', needle: 'Пенальти', mark: /Пенальти/iu },
-  { id: "extra-33", label: 'Три вида', needle: 'Три вида', mark: /Три вида/iu },
-  { id: "extra-34", label: 'Пять зву', needle: 'Пять зву', mark: /Пять зву/iu },
-  { id: "extra-35", label: 'Пробный ', needle: 'Пробный ', mark: /Пробный /iu },
-  { id: "extra-36", label: 'У семьи ', needle: 'У семьи ', mark: /У семьи /iu },
-  { id: "extra-37", label: 'В саундт', needle: 'В саундт', mark: /В саундт/iu },
-  { id: "extra-38", label: 'Под заст', needle: 'Под заст', mark: /Под заст/iu },
-  { id: "extra-39", label: 'Под титр', needle: 'Под титр', mark: /Под титр/iu },
-  { id: "extra-40", label: 'Английск', needle: 'Английск', mark: /Английск/iu },
-  { id: "extra-41", label: 'Семейное', needle: 'Семейное', mark: /Семейное/iu },
-  { id: "extra-42", label: 'Древо ви', needle: 'Древо ви', mark: /Древо ви/iu },
-  { id: "extra-43", label: 'Когда др', needle: 'Когда др', mark: /Когда др/iu },
-  { id: "extra-44", label: 'Инвентар', needle: 'Инвентар', mark: /Инвентар/iu },
-  { id: "extra-45", label: 'У каждог', needle: 'У каждог', mark: /У каждог/iu },
-  { id: "extra-46", label: 'Предметы', needle: 'Предметы', mark: /Предметы/iu },
-  { id: "extra-47", label: 'Записи р', needle: 'Записи р', mark: /Записи р/iu },
-  { id: "extra-48", label: 'На iPhon', needle: 'На iPhon', mark: /На iPhon/iu },
-  { id: "extra-49", label: 'Ускорени', needle: 'Ускорени', mark: /Ускорени/iu },
-  { id: "extra-50", label: 'Заставка', needle: 'Заставка', mark: /Заставка/iu },
-  { id: "extra-51", label: 'Заставку', needle: 'Заставку', mark: /Заставку/iu },
-  { id: "extra-52", label: 'В титрах', needle: 'В титрах', mark: /В титрах/iu },
-  { id: "extra-53", label: 'Танчики ', needle: 'Танчики ', mark: /Танчики /iu },
-  { id: "extra-54", label: 'Семья ге', needle: 'Семья ге', mark: /Семья ге/iu },
-  { id: "extra-55", label: 'У Феди е', needle: 'У Феди е', mark: /У Феди е/iu },
-  { id: "extra-56", label: 'Следоват', needle: 'Следоват', mark: /Следоват/iu },
-  { id: "extra-57", label: 'Среди эм', needle: 'Среди эм', mark: /Среди эм/iu },
-  { id: "extra-58", label: 'В первом', needle: 'В первом', mark: /В первом/iu },
-  { id: "extra-59", label: 'Иконка д', needle: 'Иконка д', mark: /Иконка д/iu },
-  { id: "extra-60", label: 'ижения х', needle: 'ижения х', mark: /ижения х/iu },
-  { id: "extra-61", label: 'жение «М', needle: 'жение «М', mark: /жение «М/iu },
-  { id: "extra-62", label: 'ение «От', needle: 'ение «От', mark: /ение «От/iu },
-  { id: "extra-63", label: 'жение «П', needle: 'жение «П', mark: /жение «П/iu },
-  { id: "extra-64", label: 'ение «С ', needle: 'ение «С ', mark: /ение «С /iu },
-  { id: "extra-65", label: 'ение «Со', needle: 'ение «Со', mark: /ение «Со/iu },
-  { id: "extra-66", label: 'жение «Я', needle: 'жение «Я', mark: /жение «Я/iu },
-  { id: "extra-67", label: 'ение «Он', needle: 'ение «Он', mark: /ение «Он/iu },
-  { id: "extra-68", label: 'жение «Н', needle: 'жение «Н', mark: /жение «Н/iu },
-  { id: "extra-69", label: 'жение «Л', needle: 'жение «Л', mark: /жение «Л/iu },
-  { id: "extra-70", label: 'жение «В', needle: 'жение «В', mark: /жение «В/iu },
-  { id: "extra-71", label: 'Волна но', needle: 'Волна но', mark: /Волна но/iu },
-  { id: "extra-72", label: 'В главах', needle: 'В главах', mark: /В главах/iu },
-  { id: "extra-73", label: 'татья «О', needle: 'татья «О', mark: /татья «О/iu },
-  { id: "extra-74", label: 'Олоид во', needle: 'Олоид во', mark: /Олоид во/iu },
-  { id: "extra-75", label: 'Ремонтны', needle: 'Ремонтны', mark: /Ремонтны/iu },
-  { id: "extra-76", label: 'Сейф соб', needle: 'Сейф соб', mark: /Сейф соб/iu },
-  { id: "extra-77", label: 'У олоида', needle: 'У олоида', mark: /У олоида/iu },
-  { id: "extra-78", label: 'У сейфа ', needle: 'У сейфа ', mark: /У сейфа /iu },
-  { id: "extra-79", label: 'Зажигалк', needle: 'Зажигалк', mark: /Зажигалк/iu },
-  { id: "extra-80", label: 'Выборы э', needle: 'Выборы э', mark: /Выборы э/iu },
-  { id: "extra-81", label: 'Если зап', needle: 'Если зап', mark: /Если зап/iu },
-  { id: "extra-82", label: 'Голосов ', needle: 'Голосов ', mark: /Голосов /iu },
-  { id: "extra-83", label: 'Геймпадо', needle: 'Геймпадо', mark: /Геймпадо/iu },
+  // Хвост отфильтрованного списка: та же очередь, отдельные иглы. Следов в тексте нет: очередь по id (HistoryItem.factIds).
+  // Достижения убраны из паспорта (Илья, 2026-11-02): запрет «достижения не упоминать» остаётся.
+  { id: "extra-01", label: 'Пять раз', needle: 'Пять раз', topicMark: /пять разделов/iu },
+  { id: "extra-02", label: 'Статья г', needle: 'Статья г' },
+  { id: "extra-03", label: 'Непрочит', needle: 'Непрочит' },
+  { id: "extra-04", label: 'Открытые', needle: 'Открытые' },
+  { id: "extra-05", label: 'ссарии р', needle: 'ссарии р', topicMark: /пять разделов/iu },
+  { id: "extra-06", label: 'сария «Г', needle: 'сария «Г' },
+  { id: "extra-07", label: 'ь статьи', needle: 'ь статьи' },
+  { id: "extra-08", label: 'статья «', needle: 'статья «' },
+  { id: "extra-09", label: 'статья п', needle: 'статья п' },
+  { id: "extra-10", label: 'сария «К', needle: 'сария «К' },
+  { id: "extra-11", label: 'У «Танчи', needle: 'У «Танчи' },
+  { id: "extra-12", label: 'сария «Р', needle: 'сария «Р', topicMark: /пять разделов/iu },
+  { id: "extra-13", label: 'татья «Л', needle: 'татья «Л' },
+  { id: "extra-14", label: 'Есть пол', needle: 'Есть пол' },
+  { id: "extra-15", label: 'Двор-кол', needle: 'Двор-кол', topicMark: /двор-колодец в четырёх/iu },
+  { id: "extra-16", label: 'Дом в иг', needle: 'Дом в иг' },
+  { id: "extra-17", label: 'Адрес в ', needle: 'Адрес в ' },
+  { id: "extra-18", label: 'Рюмочная', needle: 'Рюмочная' },
+  { id: "extra-19", label: 'е есть н', needle: 'е есть н' },
+  { id: "extra-20", label: 'артира А', needle: 'артира А' },
+  { id: "extra-21", label: 'Кабинет ', needle: 'Кабинет ' },
+  { id: "extra-22", label: 'Коридор ', needle: 'Коридор ' },
+  { id: "extra-23", label: 'Пыль в в', needle: 'Пыль в в' },
+  { id: "extra-24", label: 'Салон ма', needle: 'Салон ма', topicMark: /салон машины/iu },
+  { id: "extra-25", label: 'Ёлочка-а', needle: 'Ёлочка-а', topicMark: /салон машины/iu },
+  { id: "extra-26", label: 'Оживший ', needle: 'Оживший ' },
+  { id: "extra-27", label: 'Радио в ', needle: 'Радио в ', topicMark: /радио с нарисованной/iu },
+  { id: "extra-28", label: 'Шагов в ', needle: 'Шагов в ', topicMark: /видов шагов|звук старого дома/iu },
+  { id: "extra-29", label: 'За окном', needle: 'За окном' },
+  { id: "extra-30", label: 'Пение пт', needle: 'Пение пт', topicMark: /птицы во дворе/iu },
+  { id: "extra-31", label: 'Для танч', needle: 'Для танч' },
+  { id: "extra-32", label: 'Пенальти', needle: 'Пенальти' },
+  { id: "extra-33", label: 'Три вида', needle: 'Три вида', topicMark: /сердцебиен/iu },
+  { id: "extra-34", label: 'Пять зву', needle: 'Пять зву', topicMark: /звуков дверей|звук старого дома/iu },
+  { id: "extra-35", label: 'Пробный ', needle: 'Пробный ' },
+  { id: "extra-36", label: 'У семьи ', needle: 'У семьи ', topicMark: /саундтрек/iu },
+  { id: "extra-37", label: 'В саундт', needle: 'В саундт', topicMark: /саундтрек/iu },
+  { id: "extra-38", label: 'Под заст', needle: 'Под заст' },
+  { id: "extra-39", label: 'Под титр', needle: 'Под титр' },
+  { id: "extra-40", label: 'Английск', needle: 'Английск' },
+  { id: "extra-41", label: 'Семейное', needle: 'Семейное', topicMark: /семейное древо/iu },
+  { id: "extra-42", label: 'Древо ви', needle: 'Древо ви', topicMark: /семейное древо/iu },
+  { id: "extra-43", label: 'Когда др', needle: 'Когда др' },
+  { id: "extra-44", label: 'Инвентар', needle: 'Инвентар', topicMark: /инвентар/iu },
+  { id: "extra-45", label: 'У каждог', needle: 'У каждог', topicMark: /инвентар/iu },
+  { id: "extra-46", label: 'Предметы', needle: 'Предметы', topicMark: /инвентар/iu },
+  { id: "extra-47", label: 'Записи р', needle: 'Записи р' },
+  { id: "extra-48", label: 'На iPhon', needle: 'На iPhon' },
+  { id: "extra-49", label: 'Ускорени', needle: 'Ускорени' },
+  { id: "extra-50", label: 'Заставка', needle: 'Заставка' },
+  { id: "extra-51", label: 'Заставку', needle: 'Заставку' },
+  { id: "extra-52", label: 'В титрах', needle: 'В титрах' },
+  { id: "extra-53", label: 'Танчики ', needle: 'Танчики ' },
+  { id: "extra-54", label: 'Семья ге', needle: 'Семья ге' },
+  { id: "extra-55", label: 'У Феди е', needle: 'У Феди е' },
+  { id: "extra-56", label: 'Следоват', needle: 'Следоват' },
+  { id: "extra-57", label: 'Среди эм', needle: 'Среди эм' },
+  { id: "extra-73", label: 'татья «О', needle: 'татья «О' },
+  { id: "extra-74", label: 'Олоид во', needle: 'Олоид во' },
+  { id: "extra-75", label: 'Ремонтны', needle: 'Ремонтны' },
+  { id: "extra-76", label: 'Сейф соб', needle: 'Сейф соб' },
+  { id: "extra-77", label: 'У олоида', needle: 'У олоида' },
+  { id: "extra-78", label: 'У сейфа ', needle: 'У сейфа ' },
+  { id: "extra-79", label: 'Зажигалк', needle: 'Зажигалк' },
+  { id: "extra-80", label: 'Выборы э', needle: 'Выборы э' },
+  { id: "extra-81", label: 'Если зап', needle: 'Если зап' },
+  { id: "extra-82", label: 'Голосов ', needle: 'Голосов ' },
+  { id: "extra-83", label: 'Геймпадо', needle: 'Геймпадо' },
 ];
 
 export type OloidPromptFacts = {
@@ -207,13 +196,17 @@ export type OloidPromptFacts = {
   facts: string[];
   /** Редкие эпизоды этого поста, от самых давно не выходивших. */
   color: string[];
+  /** id редких эпизодов этого поста. Пишутся в HistoryItem.factIds после публикации — по ним идёт очередь. */
+  ids: string[];
 };
 
 function oloidPosts(history: readonly HistoryItem[]): HistoryItem[] {
   return history.filter((item) => item.project === "oloid" && typeof item.text === "string");
 }
 
-function lastMarkAt(mark: RegExp, history: readonly HistoryItem[]): number | null {
+/** Последний пост, где след факта есть в тексте. Только для фактов со следом: настоящее упоминание, не выдача в промпт. */
+function lastMarkAt(mark: RegExp | undefined, history: readonly HistoryItem[]): number | null {
+  if (!mark) return null;
   for (const item of oloidPosts(history)) {
     if (!mark.test(item.text)) continue;
     const at = Date.parse(item.at);
@@ -222,43 +215,65 @@ function lastMarkAt(mark: RegExp, history: readonly HistoryItem[]): number | nul
   return null;
 }
 
-function cooled(mark: RegExp, history: readonly HistoryItem[], now: Date): boolean {
+/** Когда факт последний раз выдавали в промпт (factIds) или упоминали в тексте (след, для старой истории). null — не было. */
+export function factLastUsedAt(spec: RotatingFact, history: readonly HistoryItem[]): number | null {
+  for (const item of oloidPosts(history)) {
+    const byId = Array.isArray(item.factIds) && item.factIds.includes(spec.id);
+    if (!byId && !(spec.mark && spec.mark.test(item.text))) continue;
+    const at = Date.parse(item.at);
+    if (!Number.isNaN(at)) return at;
+  }
+  return null;
+}
+
+/** След факта в тексте моложе срока: факт реально упоминался недавно. */
+function cooled(mark: RegExp | undefined, history: readonly HistoryItem[], now: Date): boolean {
   const at = lastMarkAt(mark, history);
   if (at == null) return false;
   return now.getTime() - at < COOLDOWN_MS;
 }
 
-/** Общие факты и до четырёх редких эпизодов, которые не выходили последние несколько дней. */
+/** Факт выдавали или упоминали моложе срока — в очередь не ставим. */
+function factCooled(spec: RotatingFact, history: readonly HistoryItem[], now: Date): boolean {
+  const at = factLastUsedAt(spec, history);
+  if (at == null) return false;
+  return now.getTime() - at < COOLDOWN_MS;
+}
+
+/** Общие факты и до четырёх редких эпизодов: дольше всех не выдававшиеся, при равенстве — случайно.
+ *  topic — тема поста: факты с подходящим topicMark кладутся вне очереди (тема без них не пишется).
+ *  random — источник случайности для ничьих (в проверках — детерминированный). */
 export function oloidPromptFacts(
   facts: readonly string[],
   history: readonly HistoryItem[],
   now: Date,
-  opts?: { rubricId?: string },
+  opts?: { rubricId?: string; topic?: string; random?: () => number },
 ): OloidPromptFacts {
   const anchors = facts.filter((fact) => !OLOID_ROTATING_FACTS.some((spec) => fact.includes(spec.needle)));
   // Пост цифр говорит ровно одну цифру. Чужой эпизод приносит лишние числа.
-  if (opts?.rubricId === OLOID_DEV_NUMBERS_RUBRIC) return { facts: [...anchors], color: [] };
+  if (opts?.rubricId === OLOID_DEV_NUMBERS_RUBRIC) return { facts: [...anchors], color: [], ids: [] };
+  const random = opts?.random ?? Math.random;
 
   const rotating = facts.flatMap((text, index) => {
     const spec = OLOID_ROTATING_FACTS.find((item) => text.includes(item.needle));
     return spec ? [{ text, spec, index }] : [];
   });
-  const color = rotating
+  const topic = opts?.topic ?? "";
+  const pinned = topic ? rotating.filter((item) => item.spec.topicMark?.test(topic)) : [];
+  const queue = rotating
     .filter((item) => {
-      if (cooled(item.spec.mark, history, now)) return false;
+      if (pinned.includes(item)) return false;
+      if (factCooled(item.spec, history, now)) return false;
       // Провокация отклоняет часы прохождения отдельным фильтром. Не предлагать факт, который слот всё равно снимет.
       if (opts?.rubricId === OLOID_PROVOCATION_RUBRIC && /2\s*[–—-]\s*3\s*час/iu.test(item.text)) return false;
       return true;
     })
-    .sort((a, b) => {
-      const aa = lastMarkAt(a.spec.mark, history) ?? 0;
-      const bb = lastMarkAt(b.spec.mark, history) ?? 0;
-      if (aa !== bb) return aa - bb;
-      return a.index - b.index;
-    })
-    .slice(0, OLOID_COLOR_FACTS_PER_POST)
-    .map((item) => item.text);
-  return { facts: [...anchors, ...color], color };
+    .map((item) => ({ ...item, last: factLastUsedAt(item.spec, history) ?? 0, tie: random() }))
+    .sort((a, b) => a.last - b.last || a.tie - b.tie || a.index - b.index)
+    .slice(0, Math.max(0, OLOID_COLOR_FACTS_PER_POST - pinned.length));
+  const chosen = [...pinned, ...queue];
+  const color = chosen.map((item) => item.text);
+  return { facts: [...anchors, ...color], color, ids: chosen.map((item) => item.spec.id) };
 }
 
 export function oloidColorSteer(color: readonly string[], rubricId?: string): string {
@@ -294,7 +309,7 @@ export function topicHitsRecentDetail(topic: string, history: readonly HistoryIt
 /** Тема сама называет деталь из последних постов или редкий факт, который ещё на паузе. */
 export function topicRepeatsRecent(topic: string, history: readonly HistoryItem[], now: Date): boolean {
   if (topicHitsRecentDetail(topic, history)) return true;
-  return OLOID_ROTATING_FACTS.some((spec) => spec.mark.test(topic) && cooled(spec.mark, history, now));
+  return OLOID_ROTATING_FACTS.some((spec) => !!spec.mark && spec.mark.test(topic) && cooled(spec.mark, history, now));
 }
 
 /** Черновик повторяет предмет или сцену из последних постов «Олоида». */
@@ -310,7 +325,7 @@ export function repeatedDetailProblem(text: string, history: readonly HistoryIte
 
 /** Редкий факт уже выходил в последние несколько дней. */
 export function cooledFactProblem(text: string, history: readonly HistoryItem[], now: Date): string | null {
-  const hits = OLOID_ROTATING_FACTS.filter((spec) => spec.mark.test(text) && cooled(spec.mark, history, now));
+  const hits = OLOID_ROTATING_FACTS.filter((spec) => !!spec.mark && spec.mark.test(text) && cooled(spec.mark, history, now));
   if (!hits.length) return null;
   const labels = hits.slice(0, 4).map((spec) => spec.label).join(", ");
   return `факт уже был в последние ${OLOID_FACT_COOLDOWN_DAYS} дня: ${labels}. Возьми другой`;
