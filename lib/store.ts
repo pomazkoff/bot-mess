@@ -45,6 +45,8 @@ export type HistoryItem = {
   lineId?: string; // id реплики рубрики «реплика дня»
   mediaId?: string; // id карусели или ролика обычного поста
   provocationFormat?: string; // id формата рубрики provocation
+  factIds?: string[]; // id редких фактов «Олоида», выданных в промпт этого поста (очередь фактов)
+  vkAngle?: string; // id угла рубрики vkplay
 };
 
 const K = {
@@ -76,7 +78,8 @@ export async function saveToken(ch: Channel, value: string, envHash?: string) {
   await (await db()).set(tokenKey(ch), JSON.stringify({ value, refreshedAt: Date.now(), envHash }));
 }
 
-export async function getHistory(n = 40): Promise<HistoryItem[]> {
+// 200 — вся хранимая история (pushHistory режет до 200): очереди тем и фактов видят полный круг.
+export async function getHistory(n = 200): Promise<HistoryItem[]> {
   const rows = await (await db()).lRange(K.history, 0, n - 1);
   return rows.map((r) => JSON.parse(r) as HistoryItem);
 }

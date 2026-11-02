@@ -1,6 +1,6 @@
 import { OLOID_DEV_NUMBER_FACTS, OLOID_DEV_NUMBERS_RUBRIC } from "./devFacts.js";
-import { appStoreCodeProblem, appStoreMomentProblem, appStorePriceProblem, detectiveRefProblem, draftPost, pickPromoAngle, promptMetaProblem, repeatedEnding, ruleCheck, similarityScore, stripPromptMeta, tooSimilar, extraCodeProblem, stripExtraCode, vkPlayProblem, factCheck, type PromoAngle } from "./generate.js";
-import { oloidRepeatProblem, spatulaProblem, topicRepeatsRecent } from "./oloidFacts.js";
+import { appStoreCodeProblem, appStoreMomentProblem, appStorePriceProblem, detectiveRefProblem, draftPost, pickPromoAngle, promptMetaProblem, repeatedEnding, ruleCheck, similarityScore, stripPromptMeta, tooSimilar, extraCodeProblem, stripExtraCode, vkPlayProblem, vkPlayOpeningProblem, pickVkPlayAngle, factCheck, type PromoAngle, type VkPlayAngle } from "./generate.js";
+import { oloidPromptFacts, oloidRepeatProblem, spatulaProblem, topicRepeatsRecent } from "./oloidFacts.js";
 import {
   OLOID_ASK_RUBRIC,
   OLOID_LINE_RUBRIC,
@@ -25,7 +25,7 @@ import {
   type PollAttachment,
   type SlotTone,
 } from "./oloidRotation.js";
-import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, mskCalendarDay, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_FROM, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_PROVOCATION_SLOT_HOUR_MSK, OLOID_PROVOCATION_SLOT_UNTIL_HOUR_MSK, OLOID_VKPLAY_RUBRIC, OLOID_VKPLAY_SKIP_REASON, OLOID_VKPLAY_SLOT_HOUR_MSK, PROJECTS, pickWeighted, spentAppStoreCodes, vkPlayUrlBlocked, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
+import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, factsFor, mskCalendarDay, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_FROM, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_PROVOCATION_SLOT_HOUR_MSK, OLOID_PROVOCATION_SLOT_UNTIL_HOUR_MSK, OLOID_VKPLAY_RUBRIC, OLOID_VKPLAY_SKIP_REASON, OLOID_VKPLAY_SLOT_HOUR_MSK, PROJECTS, pickWeighted, spentAppStoreCodes, vkPlayUrlBlocked, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
 import type { HistoryItem } from "./store.js";
 import type { Channel } from "./channels.js";
 import { pickRegularShown } from "./variety.js";
@@ -63,6 +63,10 @@ export type Draft = {
   provocationCount?: number;
   /** Пост с кодом: все попытки упёрлись только в похожесть, вышел лучший вариант, прошедший жёсткие проверки и фактчек. */
   fallback?: boolean;
+  /** id редких фактов «Олоида», выданных в промпт. Пишутся в историю: по ним идёт очередь фактов. */
+  factIds?: string[];
+  /** Угол поста VK Play. */
+  vkAngle?: string;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -96,6 +100,34 @@ export function dailyRubricPending(project: Project, dailyDoneDate: string | nul
   if (!project.dailyRubric) return false;
   if (!project.rubrics.some((r) => r.id === project.dailyRubric)) return false;
   return dailyDoneDate !== mskDay(now);
+}
+
+/** Сколько календарных суток МСК прошло с последнего поста проекта в одной из рубрик. Не было — Infinity.
+ *  Считаем по датам МСК, а не по часам: сдвиг крона на минуты не переносит пост на день. */
+export function mskDaysSinceRubric(projectId: string, rubricIds: readonly string[], history: readonly HistoryItem[], now: Date): number {
+  const last = history.find((h) => h.project === projectId && rubricIds.includes(h.rubric) && !Number.isNaN(Date.parse(h.at)));
+  if (!last) return Infinity;
+  const today = Date.parse(mskDay(now));
+  const then = Date.parse(mskDay(new Date(last.at)));
+  return Math.round((today - then) / DAY_MS);
+}
+
+/** Рубрика с интервалом everyDays уже «созрела»: с последнего её поста прошло не меньше N суток МСК. Без интервала — всегда. */
+export function rubricSpacingDue(projectId: string, rubricIds: readonly string[], everyDays: number | undefined, history: readonly HistoryItem[], now: Date): boolean {
+  if (!everyDays || everyDays <= 1) return true;
+  return mskDaysSinceRubric(projectId, rubricIds, history, now) >= everyDays;
+}
+
+/** Сколько постов проекта в рубриках вышло за последние `days` календарных суток МСК, включая сегодня. */
+export function rubricPostsWithinMskDays(projectId: string, rubricIds: readonly string[], history: readonly HistoryItem[], now: Date, days: number): number {
+  const today = Date.parse(mskDay(now));
+  return history.filter((h) => {
+    if (h.project !== projectId || !rubricIds.includes(h.rubric)) return false;
+    const at = Date.parse(h.at);
+    if (Number.isNaN(at)) return false;
+    const diff = Math.round((today - Date.parse(mskDay(new Date(at)))) / DAY_MS);
+    return diff >= 0 && diff < days;
+  }).length;
 }
 
 /** Второй дневной пост берёт этот час. Заглушка в ссылке занимает только окно слота (5 часов), вечерний пост не съедает. */
@@ -171,8 +203,23 @@ export function pickRubric(
     const pool = eligibleRotationRubrics(project);
     return pool.length ? pickLeastRecent(pool, rotation?.lastUsed ?? {}) : weighted();
   };
-  const dailyPending = !!(daily && dailyRubricPending(project, dailyDoneDate, now));
-  const secondPending = !!(second && secondDailyPending(project, secondDailyDoneDate, now));
+  // Интервалы (dailyEveryDays, secondDailyEveryDays): несозревший слот проваливается дальше — в провокацию,
+  // трейлер или обычный пост. App Store считается по обеим рубрикам: appstore и appstore-promo.
+  const dailyIds = [daily?.id, promo?.id].filter((id): id is string => !!id);
+  const dailyPending = !!(
+    daily &&
+    dailyRubricPending(project, dailyDoneDate, now) &&
+    rubricSpacingDue(project.id, dailyIds, project.dailyEveryDays, allHistory, now)
+  );
+  // VK Play с интервалом не выходит в один день МСК с App Store: так магазины расходятся по разным дням.
+  const storeToday = !!project.secondDailyEveryDays && mskDaysSinceRubric(project.id, dailyIds, allHistory, now) === 0;
+  const secondPending = !!(
+    second &&
+    secondDailyPending(project, secondDailyDoneDate, now) &&
+    rubricSpacingDue(project.id, [second.id], project.secondDailyEveryDays, allHistory, now) &&
+    (project.secondDailyMaxPerWeek == null || rubricPostsWithinMskDays(project.id, [second.id], allHistory, now, 7) < project.secondDailyMaxPerWeek) &&
+    !storeToday
+  );
   const afternoon = mskHour(now) >= (project.secondDailyHourMsk ?? OLOID_VKPLAY_SLOT_HOUR_MSK);
   // Утро (до secondDailyHourMsk) второй дневной пост не занимает.
   if (!afternoon) {
@@ -198,6 +245,12 @@ export function pickRubric(
   ) {
     return third;
   }
+  // Слот магазина с интервалом в несозревший день — обычный пост из ротации, не трейлер: трейлер ждёт вечера.
+  const hour = mskHour(now);
+  const secondHour = project.secondDailyHourMsk ?? OLOID_VKPLAY_SLOT_HOUR_MSK;
+  const thirdHour = project.thirdDailyHourMsk ?? OLOID_PROVOCATION_SLOT_HOUR_MSK;
+  if (daily && project.dailyEveryDays && !afternoon) return regular();
+  if (second && project.secondDailyEveryDays && hour >= secondHour && hour < thirdHour) return regular();
   // Календарный повод занимает один обычный пост и не сбрасывает срок трейлера.
   if (rotation?.preferRegular) return regular();
   if (!alt) return regular();
@@ -296,16 +349,21 @@ function forcedRefIfPending(history: HistoryItem[], forceNextRef?: string): Dete
   }
 }
 
-/** Тема рубрики, которой не было в недавних постах этой рубрики; когда темы кончились — круг заново. */
-export function pickTopic(rubric: Rubric, history: HistoryItem[], blocked?: (topic: string) => boolean): string | undefined {
+/** Тема рубрики по очереди LRU: сначала темы, которых не было в истории, потом самые давние; при равенстве — случайно.
+ *  blocked — темы, которые сейчас нельзя (недавняя деталь, факт на паузе); если закрыты все — берём из всех. */
+export function pickTopic(rubric: Rubric, history: HistoryItem[], blocked?: (topic: string) => boolean, random: () => number = Math.random): string | undefined {
   if (!rubric.topics?.length) return undefined;
-  const used = new Set(history.filter((h) => h.rubric === rubric.id).map((h) => h.topic));
-  const fresh = rubric.topics.filter((t) => !used.has(t));
-  const open = (list: string[]) => (blocked ? list.filter((topic) => !blocked(topic)) : list);
-  const freshOpen = open(fresh);
-  const anyOpen = open(rubric.topics);
-  const pool = freshOpen.length ? freshOpen : anyOpen.length ? anyOpen : fresh.length ? fresh : rubric.topics;
-  return pool[Math.floor(Math.random() * pool.length)];
+  const own = history.filter((h) => h.rubric === rubric.id);
+  // История — от новых к старым: индекс последнего поста с темой; не было — Infinity (дольше всех не выходила).
+  const age = (topic: string) => {
+    const i = own.findIndex((h) => h.topic === topic);
+    return i === -1 ? Infinity : i;
+  };
+  const open = blocked ? rubric.topics.filter((topic) => !blocked(topic)) : [];
+  const pool = open.length ? open : rubric.topics;
+  const oldest = Math.max(...pool.map(age));
+  const ties = pool.filter((topic) => age(topic) === oldest);
+  return ties[Math.floor(random() * ties.length)];
 }
 
 /** Выбирает проект/рубрику и генерирует пост с проверками. Ничего не публикует и ничего не пишет в историю. */
@@ -451,6 +509,9 @@ export async function makeDraft(opts: {
   // Пост с кодом: угол — тот, что дольше всех не был в постах App Store; ничья — по дате МСК.
   let promoAngle = rubric.id === OLOID_APP_STORE_PROMO_RUBRIC ? pickPromoAngle(history, now, [], wanted) : undefined;
   if (promoAngle) topic = promoAngle.label;
+  // Пост VK Play: угол, который дольше всех не выходил; на каждой попытке — свой угол и свой приём начала.
+  let vkAngle: VkPlayAngle | undefined = rubric.id === OLOID_VKPLAY_RUBRIC && project.id === "oloid" ? pickVkPlayAngle(history, now, [], wanted) : undefined;
+  if (vkAngle) topic = vkAngle.label;
   const line = rubric.id === OLOID_LINE_RUBRIC
     ? pickCharacterLine(mergeLastUsed(lineUsed, projectHistory.map((item) => ({ id: item.lineId, at: item.at }))))
     : null;
@@ -480,7 +541,10 @@ export async function makeDraft(opts: {
   const detective = project.id === "buro" ? pickDetectiveRef(history, project.forceNextRef) : undefined;
   const promoCode = promoCodeForRubric(rubric.id, nextCode, promoScheduled, forcedRubric);
   const promoLeft = promoCode ? OLOID_APP_STORE_CODES.length - spent.length - 1 : undefined;
+  // Редкие факты «Олоида» выбираем один раз: та же пачка на всех попытках, её id уходят в историю.
+  const factPack = project.id === "oloid" ? oloidPromptFacts(factsFor(project, now, rubric.id), projectHistory, now, { rubricId: rubric.id, topic }) : null;
   const base = {
+    factIds: factPack?.ids.length ? factPack.ids : undefined,
     project,
     rubricId: rubric.id,
     topic,
@@ -498,6 +562,7 @@ export async function makeDraft(opts: {
     provocationFormat: provocationFormat?.id,
     provocationCount,
   };
+  const withAngle = () => (vkAngle ? { vkAngle: vkAngle.id, topic: vkAngle.label } : {});
 
   if (rubric.id === OLOID_APP_STORE_PROMO_RUBRIC && !promoCode) {
     const why = usedAppStoreCodes === null ? "список кодов в Redis недоступен, код не показываю" : "коды App Store закончились";
@@ -522,6 +587,10 @@ export async function makeDraft(opts: {
     promoAngle,
     promoAttempt: 0,
     promoRejected: [] as string[],
+    vkAngle,
+    vkAttempt: 0,
+    vkRejected: [] as string[],
+    factPack,
   };
 
   // Пост с кодом: 3 попытки и ещё одна, у каждой свой угол и свои приёмы начала и финала.
@@ -529,6 +598,7 @@ export async function makeDraft(opts: {
   const isPromo = rubric.id === OLOID_APP_STORE_PROMO_RUBRIC;
   const attempts = isPromo ? MAX_ATTEMPTS + 1 : MAX_ATTEMPTS;
   const triedAngles: string[] = [];
+  const triedVkAngles: string[] = [];
   let fallback: { text: string; angle?: PromoAngle; score: number } | undefined;
   let closestCopy = Infinity; // похожесть лучшего варианта, отбитого только как копия
 
@@ -539,6 +609,13 @@ export async function makeDraft(opts: {
       hints.promoAngle = promoAngle;
       hints.promoAttempt = i;
       topic = promoAngle.label;
+    }
+    if (vkAngle) {
+      if (i > 0) vkAngle = pickVkPlayAngle(history, now, triedVkAngles);
+      triedVkAngles.push(vkAngle.id);
+      hints.vkAngle = vkAngle;
+      hints.vkAttempt = i;
+      topic = vkAngle.label;
     }
     const drafted = await draftPost(project, rubric, history, now, feedback, topic, channel.voiceNote, linkContent, picture?.about, detective?.hint, promoCode, hints);
     // Пост с кодом: скопированные указания задания («коротко скажи, что…:») срезаем до проверок.
@@ -557,6 +634,7 @@ export async function makeDraft(opts: {
       appStorePriceProblem(candidate, project.id, rubric.id) ??
       appStoreMomentProblem(candidate, project.id, rubric.id) ??
       vkPlayProblem(candidate, project.id, rubric.id) ??
+      (vkAngle ? vkPlayOpeningProblem(candidate, history) : null) ??
       (isPromo ? promptMetaProblem(candidate) : null) ??
       (detective ? detectiveRefProblem(candidate, history, detective) : null);
     const soft = hard
@@ -581,7 +659,8 @@ export async function makeDraft(opts: {
     if (problem) {
       feedback = problem;
       hints.promoRejected.push(candidate);
-      rejected.push(`#${i + 1}${isPromo && promoAngle ? ` [${promoAngle.label}]` : ""} ❌ ${problem}\n${candidate}`);
+      hints.vkRejected.push(candidate);
+      rejected.push(`#${i + 1}${isPromo && promoAngle ? ` [${promoAngle.label}]` : vkAngle ? ` [${vkAngle.label}]` : ""} ❌ ${problem}\n${candidate}`);
       continue;
     }
     const pollLexicon = wantPoll && provocation && drafted.options ? provocationLexiconProblem(drafted.options.join("\n")) : null;
@@ -593,7 +672,7 @@ export async function makeDraft(opts: {
     }
     const poll = wantPoll && !pollErr && drafted.options ? toPollAttachment(drafted.options) : undefined;
     if (pollErr) rejected.push(`опрос снят, пост без опроса: ${pollErr}: ${candidate}`);
-    return { ...base, ...(isPromo ? { topic } : {}), text: candidate, poll, rejected };
+    return { ...base, ...(isPromo ? { topic } : {}), ...withAngle(), text: candidate, poll, rejected };
   }
   if (fallback) {
     rejected.push(`⚠️ вышел запасной вариант: прошёл жёсткие проверки и фактчек, похожесть ${fallback.score.toFixed(2)}`);

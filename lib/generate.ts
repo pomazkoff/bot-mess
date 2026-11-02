@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { OLOID_DEV_NUMBERS_RUBRIC, devNumberProblem, numberTokens } from "./devFacts.js";
-import { oloidColorSteer, oloidPromptFacts, recentDetailNote, spatulaProblem } from "./oloidFacts.js";
+import { oloidColorSteer, oloidPromptFacts, recentDetailNote, spatulaProblem, type OloidPromptFacts } from "./oloidFacts.js";
 import { isOloidRotationRubric, provocationProblem, quietProblem, rotationSafetyProblem } from "./oloidRotation.js";
 import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, factsFor, forbiddenFor, mentionsPrice, mskCalendarDay, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_VKPLAY_FROM, OLOID_VKPLAY_RUBRIC, oloidRedeemUrl, promoActive, redactAppStoreCodes, type DetectiveRef, type Project, type Rubric } from "./projects.js";
 import type { HistoryItem } from "./store.js";
@@ -45,6 +45,10 @@ export type DraftHints = {
   extraTheme?: string; // внеплановый пост «Олоида» на заданную тему (/api/cron?theme=…)
   extraLink?: string; // единственная ссылка внепланового поста вместо utm-ссылки (/api/cron?link=…)
   extraCode?: string; // код, который внеплановый пост содержит дословно, заглавными (/api/cron?code=…)
+  vkAngle?: VkPlayAngle; // угол поста vkplay (pickVkPlayAngle)
+  vkAttempt?: number; // номер попытки vkplay: у каждой свой приём начала
+  vkRejected?: string[]; // отклонённые варианты vkplay этого запуска
+  factPack?: OloidPromptFacts | null; // факты «Олоида», выбранные makeDraft (id уходят в историю)
 };
 
 /** Внеплановый пост с заданным кодом: код должен стоять ровно так, заглавными. */
@@ -120,6 +124,115 @@ export function pickPromoAngle(history: HistoryItem[], now: Date, exclude: strin
   const start = dayIndex(now) % list.length;
   const rotated = [...list.slice(start), ...list.slice(0, start)];
   return rotated.reduce((best, a) => (age(a) > age(best) ? a : best));
+}
+
+// ---------- vkplay: углы и приёмы начала ----------
+
+/** Угол поста VK Play. Только то, что есть в фактах; без спойлеров. Не новость о выходе. */
+export type VkPlayAngle = { id: string; label: string; steer: string; mark: RegExp };
+
+export const VK_PLAY_ANGLES: VkPlayAngle[] = [
+  { id: "spb", label: "VK Play: Петербург 2018 года", mark: /петербург|питер|двор|доходн|улиц/iu,
+    steer: "Петербург: действие идёт в Санкт-Петербурге 2018 года. одна городская деталь из фактов или кадра, без сюжета." },
+  { id: "kommunalka", label: "VK Play: коммуналка", mark: /коммунал|кухн|коридор|сосед/iu,
+    steer: "коммуналка: одна бытовая деталь старой квартиры из фактов или кадра (кухня, коридор, комната), без сюжета." },
+  { id: "painting", label: "VK Play: визуал в стиле масляной живописи", mark: /живопис|маслян|охр|визуал/iu,
+    steer: "визуал в стиле масляной живописи: тёплый приглушённый свет. пиши только «в стиле масляной живописи», не «нарисовано маслом»." },
+  { id: "voice", label: "VK Play: озвучка актёрами", mark: /озвуч|актёр|актер|голос/iu,
+    steer: "озвучка: персонажей озвучили актёры, большая часть текста — внутренний голос Егора. без «половины работы» и наушников." },
+  { id: "hands", label: "VK Play: мини-игра движением руки", mark: /мини-игр|движени\p{L}* рук|рукой/iu,
+    steer: "мини-игра движением руки — только как в фактах, одной фразой, без того, что в ней найдено." },
+  { id: "mystery", label: "VK Play: мистический детектив", mark: /мисти|загадк|тайн|детектив/iu,
+    steer: "мистический детектив: одна странная деталь или вопрос без разгадки. не хоррор, без поворотов сюжета, тайной комнаты и природы артефакта." },
+  { id: "evening", label: "VK Play: история на один вечер", mark: /вечер|не спеша|медленн|спокойн/iu,
+    steer: "медленная история на вечер: настроение, а не список фич. длительность — только если факт про 2–3 часа есть в этом посте." },
+  { id: "who", label: "VK Play: кому зайдёт", mark: /кому зайд|если вы любите|если любите|для тех, кто/iu,
+    steer: "кому зайдёт: тем, кто любит медленные истории, старые дома или петербургские дворы. одна-две приметы читателя, без рекламных слов." },
+];
+
+// Описания приёмов, не текст: модель их не копирует. Ни одного «вышел/теперь на VK Play».
+const VK_PLAY_OPENINGS = [
+  "приём «вопрос»: первая строка — вопрос читателю по углу; VK Play — дальше, не в первой строке",
+  "приём «сцена»: первая строка — одно место, звук или свет из угла, без названия игры",
+  "приём «наблюдение»: бытовая деталь (вечер, старый дом, дорога домой) и мостик к игре",
+  "приём «странная деталь»: одна необъяснённая деталь из угла, без разгадки",
+  "приём «читатель»: первая строка описывает читателя, которому зайдёт игра, без слова «если» в начале",
+  "приём «короткая фраза»: первая строка — два-четыре слова про угол, без глаголов выхода и без названия площадки",
+];
+
+const isVkPlayPost = (h: HistoryItem) => h.project === "oloid" && h.rubric === OLOID_VKPLAY_RUBRIC;
+
+/** Сколько последних постов VK Play сверяем по началу. */
+export const VK_PLAY_OPENING_LOOKBACK = 10;
+
+/** Угол VK Play: дольше всех не выходивший (по vkAngle, теме или словам текста); ничья — по дате МСК. */
+export function pickVkPlayAngle(history: HistoryItem[], now: Date, exclude: string[] = [], wanted?: string): VkPlayAngle {
+  const pool = VK_PLAY_ANGLES.filter((a) => !exclude.includes(a.id));
+  const list = pool.length ? pool : VK_PLAY_ANGLES;
+  const forced = wanted && list.find((a) => a.label.toLowerCase().includes(wanted) || a.id === wanted);
+  if (forced) return forced;
+  const posts = history.filter(isVkPlayPost);
+  const age = (a: VkPlayAngle) => {
+    const i = posts.findIndex((h) => h.vkAngle === a.id || h.topic === a.label || (!h.vkAngle && a.mark.test(h.text)));
+    return i < 0 ? Infinity : i;
+  };
+  const start = dayIndex(now) % list.length;
+  const rotated = [...list.slice(start), ...list.slice(0, start)];
+  return rotated.reduce((best, a) => (age(a) > age(best) ? a : best));
+}
+
+/** Первая непустая строка поста без ссылок, в нижнем регистре. */
+export function firstLine(text: string): string {
+  const line = text
+    .replace(/https?:\/\/\S+/g, " ")
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.length > 0);
+  return (line ?? "").toLowerCase().replace(/\s+/g, " ");
+}
+
+const openingWords = (line: string) => line.replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter(Boolean);
+
+// Новостная рамка «вышел на VK Play» — то, от чего уходим.
+const VK_PLAY_NEWS = /(?<![\p{L}])(?:выш(?:ел|ла|ло|ли)|выкатил\p{L}*|довезл\p{L}*|привезл\p{L}*|добрал\p{L}*|выпустил\p{L}*|дождал\p{L}*|приехал\p{L}*|релиз\p{L}*|теперь\s+(?:и\s+)?на)(?![\p{L}])/iu;
+
+/** Пост VK Play: новостная рамка или начало, как у одного из последних постов VK Play. */
+export function vkPlayOpeningProblem(text: string, history: readonly HistoryItem[]): string | null {
+  const first = firstLine(text);
+  if (!first) return null;
+  if (VK_PLAY_NEWS.test(first)) return "первая строка — не новость о выходе: без «вышел», «выкатили», «довезли», «теперь на VK Play». Начни с угла поста";
+  const words = openingWords(first);
+  const lead = words.slice(0, 3).join(" ");
+  const a = trigrams(first);
+  for (const h of history.filter(isVkPlayPost).slice(0, VK_PLAY_OPENING_LOOKBACK)) {
+    const prev = firstLine(h.text);
+    if (!prev) continue;
+    const prevWords = openingWords(prev);
+    if (words.length >= 3 && prevWords.length >= 3 && prevWords.slice(0, 3).join(" ") === lead) {
+      return `начало «${lead}…» уже было у поста VK Play от ${h.at.slice(0, 10)}. Начни по-другому`;
+    }
+    const b = trigrams(prev);
+    let inter = 0;
+    for (const x of a) if (b.has(x)) inter++;
+    if (inter / (a.size + b.size - inter || 1) >= 0.5) return `первая строка похожа на начало поста VK Play от ${h.at.slice(0, 10)}. Начни по-другому`;
+  }
+  return null;
+}
+
+function vkPlayNote(angle: VkPlayAngle | undefined, history: HistoryItem[], now: Date, attempt = 0, rejectedDrafts: string[] = []): string {
+  const opening = VK_PLAY_OPENINGS[(dayIndex(now) + attempt * 2) % VK_PLAY_OPENINGS.length];
+  const starts = history
+    .filter(isVkPlayPost)
+    .slice(0, VK_PLAY_OPENING_LOOKBACK)
+    .map((h) => firstLine(h.text))
+    .filter(Boolean)
+    .map((l) => `— ${l}`)
+    .join("\n");
+  const tried = rejectedDrafts.slice(-3).map((t) => `— ${firstLine(t)}`).join("\n");
+  return `${angle ? `Угол этого поста: ${angle.steer}\n` : ""}Построение начала: ${opening}.
+Это описание построения, не текст: слова «угол», «приём», «построение» в пост не переносить.
+Не начинай с новости о выходе и не пиши «вышел», «выкатили», «довезли», «теперь на VK Play».
+${starts ? `Начала недавних постов VK Play — первая строка должна быть другой по словам и по построению:\n${starts}\n` : ""}${tried ? `Отклонённые начала этого запуска:\n${tried}\n` : ""}`;
 }
 
 function promoCodeNote(code: string, angle: PromoAngle | undefined, history: HistoryItem[], now: Date, attempt = 0, rejectedDrafts: string[] = []): string {
@@ -207,7 +320,7 @@ export async function draftPost(
   const jsonShape = wantPoll ? '{"text": "текст поста", "options": ["вариант", "вариант"]}' : '{"text": "текст поста"}';
 
   const passport = factsFor(p, now, rubric.id);
-  const factPack = p.id === "oloid" ? oloidPromptFacts(passport, history, now, { rubricId: rubric.id }) : null;
+  const factPack = hints?.factPack !== undefined ? hints.factPack : p.id === "oloid" ? oloidPromptFacts(passport, history, now, { rubricId: rubric.id, topic }) : null;
   const system = `Ты пишешь посты для Threads от лица автора проекта «${p.name}». Пишешь по-русски.
 
 ГОЛОС:
@@ -253,6 +366,7 @@ ${wantPoll ? (provocation
   : "К посту будет опрос Threads: 2–4 варианта, каждый от 1 до 25 символов и не длиннее 25 байт UTF-8 (кириллица — два байта, держи вариант короче 13 букв), без цифр, ссылок, цены и спойлеров. Варианты — короткие ответы читателя, не факты об игре. В тексте задай вопрос и не перечисляй варианты списком.") : ""}
 ${linkLine}
 ${code ? promoCodeNote(code, hints?.promoAngle, history, now, hints?.promoAttempt, hints?.promoRejected) : ""}
+${rubric.id === OLOID_VKPLAY_RUBRIC && p.id === "oloid" ? vkPlayNote(hints?.vkAngle, history, now, hints?.vkAttempt, hints?.vkRejected) : ""}
 ${season ? `Сезонный повод (по желанию): ${season}` : ""}
 ${detectiveHint ? `Обязательная отсылка в этом посте (мем, не факт о проекте и не связь с фильмом): ${detectiveHint}` : ""}
 
@@ -485,11 +599,10 @@ const VK_PLAY_FINALE = /финал|концовк|развязк/iu;
 const VK_PLAY_AI = /нейросет|искусственн\p{L}*\s+интеллект|(?<![\p{L}])ии(?![\p{L}])|(?<![\p{L}])ai(?![\p{L}])/iu;
 const VK_PLAY_AI_ALLOWED = /ии использовался как инструмент/iu;
 
-/** Пост VK Play: новость о выходе, мистическая новелла, без хоррора, пожара, финала и цены. */
+/** Пост VK Play: VK Play назван, без хоррора, пожара, финала и цены. Жанр называть не обязательно. */
 export function vkPlayProblem(text: string, projectId: string, rubricId: string): string | null {
   if (projectId !== "oloid" || rubricId !== OLOID_VKPLAY_RUBRIC) return null;
-  if (!VK_PLAY_MENTION.test(text)) return "прямо скажи, что «Олоид» вышел на VK Play";
-  if (!/мистич/iu.test(text) || !/новелл/iu.test(text)) return "назови «Олоид» мистической новеллой";
+  if (!VK_PLAY_MENTION.test(text)) return "назови VK Play в тексте";
   if (VK_PLAY_HORROR.test(text)) return "не называй «Олоид» хоррором: это мистическая новелла";
   if (VK_PLAY_FIRE.test(text)) return "пожар и огонь не упоминать";
   if (VK_PLAY_FINALE.test(text)) return "финал и концовку не упоминать";
@@ -653,7 +766,7 @@ function provocationFactNote(rubricId?: string, quiet?: boolean): string {
 
 function vkPlayFactNote(rubricId?: string): string {
   if (rubricId !== OLOID_VKPLAY_RUBRIC) return "";
-  return "Это пост рубрики VK Play. Факт, не отклоняй: «Олоид» вышел на VK Play. Ссылку в конце не отклоняй: это страница игры на VK Play, UTM нет специально. «Олоид» — мистическая визуальная новелла, не хоррор: «хоррор», horror и «ужастик» отклоняй. Пожар, огонь, финал, концовки, скелет, убийц и кадр «олоид на ладони» отклоняй. Яркий момент из фактов и кадра можно. Цену не упоминать. Если в посте есть цена — отклоняй. Про ИИ допустима только фраза «ИИ использовался как инструмент»; другие формулировки про нейросети отклоняй. Промокоды отклоняй.\n";
+  return "Это пост рубрики VK Play. Факт, не отклоняй: «Олоид» есть на VK Play (вышел там). Не требуй новость о выходе и не требуй называть жанр. Ссылку в конце не отклоняй: это страница игры на VK Play, UTM нет специально. «Олоид» — мистическая визуальная новелла, не хоррор: «хоррор», horror и «ужастик» отклоняй. Пожар, огонь, финал, концовки, скелет, убийц и кадр «олоид на ладони» отклоняй. Яркий момент из фактов и кадра можно. Цену не упоминать. Если в посте есть цена — отклоняй. Про ИИ допустима только фраза «ИИ использовался как инструмент»; другие формулировки про нейросети отклоняй. Промокоды отклоняй.\n";
 }
 
 function rotationFactNote(rubricId?: string, devFact?: string, quiet?: boolean): string {
