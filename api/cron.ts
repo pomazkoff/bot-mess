@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { appStorePromoOpen, makeDraft, mskDay } from "../lib/run.js";
 import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_SITE_URL, OLOID_VKPLAY_RUBRIC, OLOID_VKPLAY_URL } from "../lib/projects.js";
 import { postAlreadyPublished, publishPost } from "../lib/threads.js";
+import { mayRepublishWithoutMedia } from "../lib/oloidEditorial.js";
 import { OLOID_ASK_RUBRIC, isOloidRotationRubric } from "../lib/oloidRotation.js";
 import { getAppStoreCodesUsed, getAppStoreDay, getHistory, getLastProject, getOloidRotationState, getProvocationDay, getProvocationState, getVkPlayDay, markAppStoreCodeUsed, pushHistory, saveOloidRotation, saveProvocation, setAppStoreDay, setLastProject, setProvocationDay, setVkPlayDay } from "../lib/store.js";
 import { notify } from "../lib/notify.js";
@@ -140,8 +141,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       dateHooks: rotation?.dateHooks,
       lastAskWasPoll: rotation?.lastAskWasPoll,
       mediaUsed: rotation?.mediaUsed,
+      editorialUsed: rotation?.editorialUsed,
     });
-    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, lineId, tone, regularCount, mediaId, provocationFormat, provocationCount, fallback, factIds, vkAngle } = draft;
+    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, lineId, tone, regularCount, mediaId, provocationFormat, provocationCount, fallback, factIds, vkAngle, editorialId } = draft;
     const where = `${channel.name} · ${project.name}`;
 
     // Ссылка VK Play ещё заглушка: пост не генерируем и не публикуем. День закрываем, чтобы следующий слот суток не пропускался тоже.
@@ -173,6 +175,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         poll,
         dateHook,
         devFactId,
+        editorialId,
         tone,
         theme: theme || undefined,
         link: extraLink,
@@ -202,7 +205,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .then(takePublished)
       .catch(async (e) => {
         // Картинка не прошла — постим текст. Если контейнер уже опубликован, второй пост не создаём.
-        if ((!media?.droppable && media?.type !== "IMAGE") || postAlreadyPublished(e)) throw e;
+        if (!mayRepublishWithoutMedia(rubricId, media) || postAlreadyPublished(e)) throw e;
         await notify(`⚠️ ${where}: медиа не прошло (${e?.message ?? e}), публикую пост без него.`);
         used = undefined;
         return takePublished(await publishPost(channel, text, topicTag, undefined, poll));
@@ -230,6 +233,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         lineId,
         askPoll: rubricId === OLOID_ASK_RUBRIC ? Boolean(pollOptions?.length) : undefined,
         mediaId: used ? mediaId : undefined,
+        editorialId,
       });
     }
     await pushHistory({
@@ -252,6 +256,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       provocationFormat,
       factIds,
       vkAngle,
+      editorialId,
     });
     if (!theme) await setLastProject(channel, project.id);
     const promoLine = promoCode != null ? `\nПромокод: ${promoCode}. Осталось: ${promoLeft ?? 0}` : "";
@@ -261,6 +266,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       pollDropped ? `опрос не принят, вышел текст${pollError ? `: ${pollError}` : ""}` : "",
       dateHook ? `повод ${dateHook}` : "",
       devFactId ? `факт ${devFactId}` : "",
+      editorialId ? `источник ${editorialId}` : "",
       provocationFormat ? `формат ${provocationFormat}` : "",
       fallback ? "запасной вариант: похоже на недавние, но жёсткие проверки и фактчек пройдены" : "",
       tone === "morning" ? "утро" : tone === "evening" ? "вечер" : tone === "day" ? "день" : "",
