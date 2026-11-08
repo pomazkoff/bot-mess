@@ -695,8 +695,8 @@ export async function makeDraft(opts: {
     // Пост с кодом: скопированные указания задания («коротко скажи, что…:») срезаем до проверок.
     // Отзыв: цитату, ник и ссылку ставит код. Модель пишет только ответ команды.
     let candidate = isPromo ? stripPromptMeta(drafted.text) : drafted.text;
+    const reviewLink = editorial?.kind === "review" && !quiet ? editorial.review.sourceUrl : undefined;
     if (editorial?.kind === "review") {
-      const reviewLink = quiet ? undefined : (rubric.link ?? project.link)(now, linkContent);
       const assembled = assembleReviewPost(candidate, editorial.review, { link: reviewLink });
       if (!assembled) {
         feedback = "не собрался ответ на отзыв";
@@ -712,7 +712,7 @@ export async function makeDraft(opts: {
       devFact: devFact?.text,
       quiet,
       promoAngle,
-      extraLink,
+      extraLink: reviewLink ?? extraLink,
       extraCode,
       editorialFacts: editorial ? editorialFacts(editorial) : undefined,
       editorialNote: editorial ? editorialFactNote(editorial) : undefined,
@@ -729,7 +729,7 @@ export async function makeDraft(opts: {
     const simHistory = extraCode ? history.map((h) => ({ ...h, text: stripExtraCode(h.text, extraCode) })) : history;
     const hard =
       (editorial ? editorialProblem(candidate, editorial, media) : null) ??
-      ruleCheck(candidate, project, now, rubric, linkContent, promoCode, quiet, devFact?.text, extraLink) ??
+      ruleCheck(candidate, project, now, rubric, linkContent, promoCode, quiet, devFact?.text, reviewLink ?? extraLink) ??
       (extraCode ? extraCodeProblem(candidate, extraCode) : null) ??
       (project.id === "oloid" ? spatulaProblem(withOptions) : null) ??
       appStoreCodeProblem(candidate, project.id, rubric.id, promoCode) ??

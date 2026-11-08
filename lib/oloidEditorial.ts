@@ -5,12 +5,12 @@
 // Как добавить одобренное:
 // - дневник: объект в OLOID_DIARY_ENTRIES (id, дословная цитата, что именно можно сказать). Без устного «ну вроде»;
 // - кадр: объект в OLOID_FRAME_SOURCES и файл в public/media/oloid. Нет файла — источник пропускается;
-// - отзыв: объект в OLOID_REVIEWS с площадкой, датой, ником и дословным текстом. Звёзды не храним.
+// - отзыв: объект в OLOID_REVIEWS с площадкой, датой, ником и дословным текстом игрока. Звёзды и ответы разработчика не храним.
 // После правки: npx tsc --noEmit && npx tsx lib/selfcheck.ts. Происхождение — docs/oloid-editorial.md.
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { OLOID_APP_STORE_URL, type Media } from "./projects.js";
+import { OLOID_APP_STORE_URL, OLOID_VKPLAY_URL, mentionsPrice, type Media } from "./projects.js";
 
 export const OLOID_DIARY_RUBRIC = "diary";
 export const OLOID_FRAME_RUBRIC = "frame";
@@ -84,21 +84,26 @@ export type FrameSource = {
 
 export type ReviewSource = {
   id: string;
-  platform: "app-store";
-  appId: string;
+  platform: "app-store" | "vk-play";
+  /** У App Store — id приложения. У VK Play пусто: страница одна, id в адресе. */
+  appId?: string;
   sourceUrl: string;
-  /** День выгрузки, YYYY-MM-DD. В пост не попадает. */
-  exportedOn: string;
-  /** День отзыва, YYYY-MM-DD. */
+  /** Откуда текст и дата. В пост не попадает. */
+  provenance: string;
+  /** День выгрузки API, если она была. В пост не попадает. */
+  exportedOn?: string;
+  /** День отзыва, YYYY-MM-DD. Со скриншота, если дата на нём читается. */
   date: string;
   handle: string;
-  /** Дословный текст, включая опечатки и регистр. */
+  /** Дословный текст игрока, включая опечатки и регистр. Ответов разработчика здесь нет. */
   text: string;
   /**
-   * Непрерывный кусок text, если в пост целиком не входит.
+   * Непрерывный кусок text, если в пост целиком не входит или в нём нельзя публиковать соседний кусок.
    * Рядом с ником код пишет «фрагмент отзыва». Нет поля — цитата равна text.
    */
   excerpt?: string;
+  /** В отзыве есть оговорка, не только похвала. */
+  mixed?: boolean;
 };
 
 const DIARY_QUOTE = "выглядит как дочь Егора";
@@ -211,11 +216,16 @@ export function formatReviewDay(iso: string): string | null {
   return `${Number(match[3])} ${month} ${match[1]}`;
 }
 
+const ASC_PROVENANCE =
+  "Скриншот App Store Connect (оценки iOS, приложение 6817809325), дата как на экране. Текст сверен с выгрузкой API 29.10.2026. Звёзды и ответы разработчика не храним.";
+const VK_PROVENANCE =
+  "Скриншот страницы VK Play https://vkplay.ru/play/game/oloid-50004/. Оценка и ответ разработчика не храним.";
+
 /**
- * Выгрузка App Store Connect 29.10.2026, приложение 6817809325.
- * В посты входят только три отзыва, которые Илья оставил. Mornkalabra не входит:
- * там сравнение «человеческий труд / нейрослоп», его легко прочитать как утверждение команды.
- * Звёзды и число отзывов не храним и не пишем.
+ * Отзывы игроков. Цитату в пост ставит код.
+ * App Store: скриншот Connect важнее часового пояса выгрузки 29.10.2026.
+ * VK Play: только скриншот, не страница App Store.
+ * Ответы разработчика в массив не входят и в ответ команды не переносятся.
  */
 export const OLOID_REVIEWS: readonly ReviewSource[] = [
   {
@@ -223,42 +233,152 @@ export const OLOID_REVIEWS: readonly ReviewSource[] = [
     platform: "app-store",
     appId: "6817809325",
     sourceUrl: OLOID_APP_STORE_URL,
+    provenance: ASC_PROVENANCE,
     exportedOn: "2026-10-29",
     date: "2026-10-26",
     handle: "Одосинский",
     text: "Картинка, звук, музыка, сюжет – все очень хорошо сделано. Ждем второй эпизод",
   },
   {
-    id: "review-asc-mufasa093-2026-10-24",
+    id: "review-asc-mufasa093-2026-10-23",
     platform: "app-store",
     appId: "6817809325",
     sourceUrl: OLOID_APP_STORE_URL,
+    provenance: ASC_PROVENANCE,
     exportedOn: "2026-10-29",
-    date: "2026-10-24",
+    date: "2026-10-23",
     handle: "mufasa093",
     text: "Олоид - первая игра в жанре визуальной новеллы, с которой я столкнулся. Очень рад, что познакомился с жанром именно через эту игру. Нереальная рисовка, отличный сценарий и голоса, музыка очень понравилась. Читал, что запланировано ещё три эпизода. Жду с нетерпением 🔥",
   },
   {
-    id: "review-asc-solnechny-god-2026-10-20",
+    id: "review-asc-solnechny-god-2026-10-19",
     platform: "app-store",
     appId: "6817809325",
     sourceUrl: OLOID_APP_STORE_URL,
+    provenance: ASC_PROVENANCE,
     exportedOn: "2026-10-29",
-    date: "2026-10-20",
+    date: "2026-10-19",
     handle: "solnechny god",
     text: "понравился стиль игры, держит в напряжении, как и должно быть в визуальной новелле. уже появилось несколько теорий о дальнейших развилках \n\nбуду ждать второй эпизод\n\nотельный респект за музыку и мини-игру танчики)",
+  },
+  {
+    id: "review-asc-galina-marina-2026-10-19",
+    platform: "app-store",
+    appId: "6817809325",
+    sourceUrl: OLOID_APP_STORE_URL,
+    provenance: ASC_PROVENANCE,
+    exportedOn: "2026-10-29",
+    date: "2026-10-19",
+    handle: "Галина Марина",
+    text: "поиграла на ночь и пожалела что не днём😅😅💪🏻 очень жутко и интересно было, спасибо, жду продолжения🌸",
+    // В полном тексте несколько эмодзи, пост держит один. Фрагмент непрерывный и без пачки эмодзи.
+    excerpt: "очень жутко и интересно было, спасибо, жду продолжения",
+  },
+  {
+    id: "review-asc-martishka9-2026-10-19",
+    platform: "app-store",
+    appId: "6817809325",
+    sourceUrl: OLOID_APP_STORE_URL,
+    provenance: ASC_PROVENANCE,
+    exportedOn: "2026-10-29",
+    date: "2026-10-19",
+    handle: "martishka9",
+    text: "Очень красивая игра🔥Хочется рассматривать и рассматривать! Музыка подчеркивает атмосферу.  Ничего подобного не встречала, чтобы всё так хорошо сочеталось.",
+  },
+  {
+    id: "review-asc-manga-n-2026-10-19",
+    platform: "app-store",
+    appId: "6817809325",
+    sourceUrl: OLOID_APP_STORE_URL,
+    provenance: ASC_PROVENANCE,
+    exportedOn: "2026-10-29",
+    date: "2026-10-19",
+    handle: "Manga_n",
+    text: "Первый раз играла в визуальную новеллу. Понравился мрачный мистический вайб, картинка, музыка и самое классное -текст. Затягивает. Спасибо разработчикам, жду продолжения !!",
+  },
+  {
+    id: "review-asc-andrulban-2026-10-19",
+    platform: "app-store",
+    appId: "6817809325",
+    sourceUrl: OLOID_APP_STORE_URL,
+    provenance: ASC_PROVENANCE,
+    exportedOn: "2026-10-29",
+    date: "2026-10-19",
+    handle: "Andrulban",
+    text: "Отличная визуальная новелла по канонам жанра , живые персонажи и интригующий сюжет , всем советую ознакомиться, рисовка супер 👍",
+  },
+  {
+    id: "review-asc-mornkalabra-2026-10-26",
+    platform: "app-store",
+    appId: "6817809325",
+    sourceUrl: OLOID_APP_STORE_URL,
+    provenance: `${ASC_PROVENANCE} В пост берём только фрагмент без сравнения с нейрослопом и без подсказки про код сейфа.`,
+    exportedOn: "2026-10-29",
+    date: "2026-10-26",
+    handle: "Mornkalabra",
+    text: "В современных реалиях обилия нейрослопа – приятно видеть оригинальный человеческий труд вложенный в эту игру. Обычно не играю в новеллы с телефона, т.к. довольно мелкий текст, но тут все сделано очень комфортно. \nОтдельное спасибо за подсказку с кодом для сейфа))\n\nПроходится на одном дыхании, теперь интересно что будет дальше!\nКогда будет следующий эпизод?",
+    excerpt: "Проходится на одном дыхании, теперь интересно что будет дальше!",
+  },
+  {
+    id: "review-vk-grayromance-2026-10-22",
+    platform: "vk-play",
+    sourceUrl: OLOID_VKPLAY_URL,
+    provenance: VK_PROVENANCE,
+    date: "2026-10-22",
+    handle: "grayromance",
+    text: "От других новелл отличается собственным стилем, здесь всё проработано до мелочей, графика, музыка, сюжет.",
+  },
+  {
+    id: "review-vk-alevarina-2026-10-27",
+    platform: "vk-play",
+    sourceUrl: OLOID_VKPLAY_URL,
+    provenance: VK_PROVENANCE,
+    date: "2026-10-27",
+    handle: "alevarina",
+    text: "Очень классная новелла, была в восторге когда проходила ее! теперь жду следующие эпизоды чтобы узнать что будет дальше) Питерская атмосфера очень порадовала, саунд-дизайн великолепный, и сама история очень интересная! Спасибо разрабам!",
+  },
+  {
+    id: "review-vk-egipetskayasila01-2026-10-22",
+    platform: "vk-play",
+    sourceUrl: OLOID_VKPLAY_URL,
+    provenance: VK_PROVENANCE,
+    date: "2026-10-22",
+    handle: "egipetskayasila01",
+    text: "Классная визуальная новелла!\n\nПосле работы проходить – самое то)) И жутко, и атмосферно. Спасибо разработчикам. Интересно глянуть что будет во 2 эпизоде",
+  },
+  {
+    id: "review-vk-vyacheslav-bezumnyh-2026-10-30",
+    platform: "vk-play",
+    sourceUrl: OLOID_VKPLAY_URL,
+    provenance: VK_PROVENANCE,
+    date: "2026-10-30",
+    handle: "Вячеслав Безумных",
+    mixed: true,
+    text: "Есть шероховатости. И они по началу отталкивают. Но если дать игре шанс она раскрывается. Игра погружает в свою атмосферу. Хотелось узнать что же будет дальше. Игра эпизодическая, если раз в неделю будет выходить это хорошо, а если раз в год , то уже спорно. Игра не скучная, так что советую.",
   },
 ];
 
 export type PublishedQuote = { text: string; excerpt: boolean };
 
+export function reviewPlatformLabel(platform: ReviewSource["platform"]): string {
+  return platform === "vk-play" ? "VK Play" : "App Store";
+}
+
+function expectedReviewUrl(platform: ReviewSource["platform"]): string {
+  return platform === "vk-play" ? OLOID_VKPLAY_URL : OLOID_APP_STORE_URL;
+}
+
 /** Цитата к публикации: весь текст или непрерывный фрагмент. Иначе источник нельзя брать. */
 export function quoteToPublish(review: ReviewSource): PublishedQuote | null {
-  if (review.platform !== "app-store" || review.sourceUrl !== OLOID_APP_STORE_URL) return null;
+  if (review.sourceUrl !== expectedReviewUrl(review.platform)) return null;
   if (!review.text.trim() || !review.handle.trim() || !formatReviewDay(review.date)) return null;
   const text = review.excerpt ?? review.text;
   if (!text.trim() || !review.text.includes(text)) return null;
   return { text, excerpt: text !== review.text };
+}
+
+function reviewAttr(review: ReviewSource, day: string, excerpt: boolean): string {
+  return `${review.handle}, ${reviewPlatformLabel(review.platform)}, ${day}${excerpt ? ". фрагмент отзыва" : ""}`;
 }
 
 function stamp(id: string, gate: EditorialGate | undefined): number {
@@ -449,7 +569,9 @@ function replyCopiesQuote(reply: string, source: string): boolean {
 const REVIEW_REPLY_BANS: readonly { reason: string; pattern: RegExp }[] = [
   { reason: "без звёзд и оценки", pattern: /★|☆|⭐|зв[её]зд|рейтинг|средн\p{L}*\s+балл|из\s+5/iu },
   { reason: "без сводки, что игра всем нравится", pattern: /все отзыв|игроки пишут|большинство/iu },
-  { reason: "ответ не обещает дату и не подтверждает следующие эпизоды", pattern: /выйдет|выпустим|обеща|дата релиза|к релизу|ещё три|еще три|три эпизода|второй эпизод|эпизод\s*(?:ii|2)/iu },
+  { reason: "ответ не обещает дату и не подтверждает следующие эпизоды", pattern: /выйдет|выпустим|обеща|дата релиза|к релизу|ещё три|еще три|три эпизода|второй эпизод|эпизод\s*(?:ii|2)|\b2\s+эпизод/iu },
+  { reason: "не подтверждать частоту выхода и не переносить сроки из ответа разработчика", pattern: /раз в неделю|каждую неделю|еженедел|раз в год|не через год|в скором времени/iu },
+  { reason: "не цитировать сравнение с нейрослопом и подсказку про сейф", pattern: /нейрослоп|человеческ\p{L}*\s+труд|для сейфа/iu },
 ];
 
 export function reviewProblem(text: string, review: ReviewSource): string | null {
@@ -465,11 +587,15 @@ export function reviewProblem(text: string, review: ReviewSource): string | null
   if (!published.excerpt && /фрагмент отзыва/u.test(text)) return "полный отзыв не называй фрагментом";
   if (!text.includes(review.handle)) return "никнейм изменён";
   if (!text.includes(day)) return "дата отзыва изменена";
-  if (!/App Store/u.test(text)) return "площадка отзыва — App Store";
+  const platform = reviewPlatformLabel(review.platform);
+  if (!text.includes(platform)) return `площадка отзыва — ${platform}`;
+  if (review.platform === "vk-play" && /apps\.apple\.com|app store/iu.test(text)) return "это отзыв VK Play, не App Store";
+  if (review.platform === "app-store" && /vkplay\.ru/iu.test(text)) return "это отзыв App Store, не VK Play";
   if (/★|☆|⭐/.test(text)) return "без звёзд";
   const reply = reviewReplyOnly(text, review);
   if (!reply.replace(/[^\p{L}\p{N}]+/gu, "").trim()) return "нет ответа команды";
   if (replyCopiesQuote(reply, review.text)) return "ответ пересказывает цитату, оставь её дословной и отдельно";
+  if (review.platform === "vk-play" && mentionsPrice(reply)) return "в ответе на отзыв VK Play цену не называть";
   for (const ban of REVIEW_REPLY_BANS) if (ban.pattern.test(reply)) return ban.reason;
   return null;
 }
@@ -486,8 +612,9 @@ export function editorialFacts(pick: EditorialPick): string[] {
   const published = quoteToPublish(pick.review);
   if (!published) return [];
   const day = formatReviewDay(pick.review.date);
+  const where = reviewPlatformLabel(pick.review.platform);
   return [
-    `Дословный отзыв из App Store (${pick.review.handle}, ${day ?? pick.review.date}): «${published.text}». Это слова игрока, не утверждение команды и не сводка оценок.${published.excerpt ? " В посте это фрагмент, он непрерывный и дословный." : ""}`,
+    `Дословный отзыв из ${where} (${pick.review.handle}, ${day ?? pick.review.date}): «${published.text}». Это слова игрока, не утверждение команды и не сводка оценок.${published.excerpt ? " В посте это фрагмент, он непрерывный и дословный. Соседние фразы отзыва, которых нет в ёлочках, не добавляй." : ""}${pick.review.mixed ? " В отзыве есть оговорки, это не сплошная похвала." : ""}`,
   ];
 }
 
@@ -498,7 +625,8 @@ export function editorialFactNote(pick: EditorialPick): string {
   if (pick.kind === "frame") {
     return "Это пост одной видимой детали одного кадра. Детали из описания кадра можно. Отклоняй реальный прототип двора, адрес Раздольная, чемпионат, предысторию «Инвойс», кто и зачем поставил вещь, игровую механику этих вещей и детали, которых нет на этом кадре.\n";
   }
-  return "Цитата в ёлочках — дословный отзыв из App Store. Не отклоняй её регистр, опечатки, эмодзи и слова про следующие эпизоды внутри ёлочек. Отклоняй звёзды, число отзывов, сводку «всем нравится» и ответ команды, который обещает дату, подтверждает число эпизодов или добавляет факт, которого нет в паспорте. Никнейм дословный.\n";
+  const where = reviewPlatformLabel(pick.review.platform);
+  return `Цитата в ёлочках — дословный отзыв из ${where}. Не отклоняй её регистр, опечатки, эмодзи и слова игрока про следующие эпизоды внутри ёлочек. Отклоняй звёзды, число отзывов, сводку «всем нравится», ответ команды с датой или частотой выхода и любые фразы ответа разработчика. Никнейм дословный. ${pick.review.platform === "vk-play" ? "Ссылка App Store и цена в этом посте не нужны." : "Ссылка VK Play в этом посте не нужна."}\n`;
 }
 
 export function editorialSteer(pick: EditorialPick, opts?: { quiet?: boolean; replyBudget?: number; withImage?: boolean }): string {
@@ -519,7 +647,10 @@ export function editorialSteer(pick: EditorialPick, opts?: { quiet?: boolean; re
     return `Одна видимая деталь этого кадра, не список и не слово «на картинке». Можно только из списка: ${labels}. Не объясняй, кто это поставил и зачем. ${pick.frame.about}`;
   }
   const budget = opts?.replyBudget ?? 120;
-  return `Напиши только ответ команды на отзыв, ${budget} символов или короче, одна-две короткие фразы. Цитату, ник, дату и ссылку не пиши и не ставь ёлочки: их добавит код. Не пересказывай отзыв. Не обещай дату, не подтверждай число эпизодов, не ставь звёзды и не пиши, что игра всем нравится.${opts?.quiet ? " Ссылку не проси." : ""}`;
+  const where = reviewPlatformLabel(pick.review.platform);
+  const mixed = pick.review.mixed ? " Отзыв с оговорками: не делай вид, что все отзывы сплошная похвала." : "";
+  const vk = pick.review.platform === "vk-play" ? " Площадка — VK Play: не упоминай App Store и не называй цену." : "";
+  return `Напиши только ответ команды на отзыв в ${where}, ${budget} символов или короче, одна-две короткие фразы. Цитату, ник, дату и ссылку не пиши и не ставь ёлочки: их добавит код. Не пересказывай отзыв. Не обещай дату, не подтверждай число или частоту эпизодов, не пиши «в скором времени» и «не через год», не ставь звёзды и не пиши, что игра всем нравится.${mixed}${vk}${opts?.quiet ? " Ссылку не проси." : ""}`;
 }
 
 /** Сколько символов остаётся ответу, когда цитата, ник и ссылка уже стоят. */
@@ -528,8 +659,8 @@ export function reviewReplyBudget(review: ReviewSource, withLink: boolean): numb
   const day = formatReviewDay(review.date);
   if (!published || !day) return 0;
   const quote = `«${published.text}»`.length;
-  const attr = `${review.handle}, App Store, ${day}${published.excerpt ? ". фрагмент отзыва" : ""}`.length;
-  const link = withLink ? OLOID_APP_STORE_URL.length + 2 : 0;
+  const attr = reviewAttr(review, day, published.excerpt).length;
+  const link = withLink ? review.sourceUrl.length + 2 : 0;
   const gaps = 4;
   return Math.max(0, 450 - quote - attr - link - gaps);
 }
@@ -553,7 +684,7 @@ export function assembleReviewPost(rawReply: string, review: ReviewSource, opts?
   const day = formatReviewDay(review.date);
   const reply = reviewReply(rawReply, review);
   if (!published || !day || !reply) return null;
-  const attr = `${review.handle}, App Store, ${day}${published.excerpt ? ". фрагмент отзыва" : ""}`;
+  const attr = reviewAttr(review, day, published.excerpt);
   const parts = [`«${published.text}»`, attr, reply];
   let text = parts.join("\n\n");
   if (opts?.link) text += `\n\n${opts.link}`;
@@ -568,6 +699,7 @@ export function reviewSimilarityText(text: string, review: ReviewSource): string
   return plain
     .replace(/фрагмент отзыва/giu, " ")
     .replace(/app store/giu, " ")
+    .replace(/vk play/giu, " ")
     .replace(/\d{1,2}\s+[а-яё]+\s+\d{4}/giu, " ")
     .replace(/https?:\/\/\S+/g, " ");
 }
