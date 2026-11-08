@@ -69,7 +69,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const rotation = channel.projects.includes("oloid")
       ? await getOloidRotationState("oloid").catch((e) => ((redis = String(e?.message ?? e)), null))
       : null;
-    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, tone, mediaId, provocationFormat } = await makeDraft({
+    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, tone, mediaId, provocationFormat, editorialId } = await makeDraft({
       channel,
       history,
       lastProject,
@@ -90,6 +90,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       dateHooks: rotation?.dateHooks,
       lastAskWasPoll: rotation?.lastAskWasPoll,
       mediaUsed: rotation?.mediaUsed,
+      editorialUsed: rotation?.editorialUsed,
     });
     const promoLine = promoCode != null ? `\nПромокод: ${promoCode}. Осталось бы: ${promoLeft}. Код не списан.` : "";
     const telegram =
@@ -114,6 +115,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       poll,
       dateHook,
       devFactId,
+      editorialId,
       provocationFormat,
       tone,
       skipped: skipReason,

@@ -4,6 +4,7 @@
 // Фактчек по-прежнему видит весь паспорт: здесь только отбор и механический повтор.
 
 import { OLOID_DEV_NUMBERS_RUBRIC } from "./devFacts.js";
+import { isOloidEditorialRubric } from "./oloidEditorial.js";
 import { OLOID_PROVOCATION_RUBRIC } from "./projects.js";
 import type { HistoryItem } from "./store.js";
 
@@ -251,7 +252,10 @@ export function oloidPromptFacts(
 ): OloidPromptFacts {
   const anchors = facts.filter((fact) => !OLOID_ROTATING_FACTS.some((spec) => fact.includes(spec.needle)));
   // Пост цифр говорит ровно одну цифру. Чужой эпизод приносит лишние числа.
-  if (opts?.rubricId === OLOID_DEV_NUMBERS_RUBRIC) return { facts: [...anchors], color: [], ids: [] };
+  // Дневник, кадр и отзыв берут свой одобренный источник, а не редкий факт: очередь фактов их не тратит.
+  if (opts?.rubricId === OLOID_DEV_NUMBERS_RUBRIC || (opts?.rubricId && isOloidEditorialRubric(opts.rubricId))) {
+    return { facts: [...anchors], color: [], ids: [] };
+  }
   const random = opts?.random ?? Math.random;
 
   const rotating = facts.flatMap((text, index) => {
@@ -277,7 +281,7 @@ export function oloidPromptFacts(
 }
 
 export function oloidColorSteer(color: readonly string[], rubricId?: string): string {
-  if (rubricId === OLOID_DEV_NUMBERS_RUBRIC) return "";
+  if (rubricId === OLOID_DEV_NUMBERS_RUBRIC || (rubricId && isOloidEditorialRubric(rubricId))) return "";
   if (!color.length) {
     return "Редкие эпизоды сейчас не добавляй: они недавно уже были. Хватит общих фактов, без новой предметной детали.\n";
   }
@@ -312,10 +316,12 @@ export function topicRepeatsRecent(topic: string, history: readonly HistoryItem[
   return OLOID_ROTATING_FACTS.some((spec) => !!spec.mark && spec.mark.test(topic) && cooled(spec.mark, history, now));
 }
 
-/** Черновик повторяет предмет или сцену из последних постов «Олоида». */
-export function repeatedDetailProblem(text: string, history: readonly HistoryItem[]): string | null {
+/** Черновик повторяет предмет или сцену из последних постов «Олоида».
+ *  exceptIds — детали выбранного кадра: их пост имеет право назвать, даже если слово уже было. */
+export function repeatedDetailProblem(text: string, history: readonly HistoryItem[], exceptIds: readonly string[] = []): string | null {
+  const skip = new Set(exceptIds);
   const recent = new Set(recentDetails(history).map((detail) => detail.id));
-  const hits = detailsIn(text).filter((detail) => recent.has(detail.id));
+  const hits = detailsIn(text).filter((detail) => recent.has(detail.id) && !skip.has(detail.id));
   if (!hits.length) return null;
   const labels = hits.slice(0, 6).map((detail) => detail.label).join(", ");
   return hits.length > 1
@@ -331,8 +337,8 @@ export function cooledFactProblem(text: string, history: readonly HistoryItem[],
   return `факт уже был в последние ${OLOID_FACT_COOLDOWN_DAYS} дня: ${labels}. Возьми другой`;
 }
 
-export function oloidRepeatProblem(text: string, history: readonly HistoryItem[], now: Date): string | null {
-  return repeatedDetailProblem(text, history) ?? cooledFactProblem(text, history, now);
+export function oloidRepeatProblem(text: string, history: readonly HistoryItem[], now: Date, exceptDetailIds: readonly string[] = []): string | null {
+  return repeatedDetailProblem(text, history, exceptDetailIds) ?? cooledFactProblem(text, history, now);
 }
 
 /** Шпатель вычищен из фактов. Пост с этим словом не публикуем. */

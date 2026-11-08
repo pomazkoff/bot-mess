@@ -23,12 +23,30 @@ import {
   usedDateHookIds,
   OLOID_PROVOCATION_FORMATS,
   type PollAttachment,
+  type RotationPick,
   type SlotTone,
 } from "./oloidRotation.js";
 import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, factsFor, mskCalendarDay, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_FROM, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_PROVOCATION_SLOT_HOUR_MSK, OLOID_PROVOCATION_SLOT_UNTIL_HOUR_MSK, OLOID_VKPLAY_RUBRIC, OLOID_VKPLAY_SKIP_REASON, OLOID_VKPLAY_SLOT_HOUR_MSK, PROJECTS, pickWeighted, spentAppStoreCodes, vkPlayUrlBlocked, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
 import type { HistoryItem } from "./store.js";
 import type { Channel } from "./channels.js";
 import { pickRegularShown } from "./variety.js";
+import {
+  assembleReviewPost,
+  diaryMedia,
+  diarySimilarityText,
+  editorialFactNote,
+  editorialFacts,
+  editorialSkipReason,
+  editorialSteer,
+  frameMedia,
+  framePairProblem,
+  editorialProblem,
+  isOloidEditorialRubric,
+  pickEditorial,
+  reviewReplyBudget,
+  reviewSimilarityText,
+  type EditorialGate,
+} from "./oloidEditorial.js";
 
 const MAX_ATTEMPTS = 3;
 // Рубрики внепланового поста на тему (/api/cron?theme=…): без опроса (ask), реплики (line) и цифр (dev-numbers).
@@ -67,6 +85,8 @@ export type Draft = {
   factIds?: string[];
   /** Угол поста VK Play. */
   vkAngle?: string;
+  /** id дневника, кадра или отзыва. Пишется после публикации, по нему источник отдыхает. */
+  editorialId?: string;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -186,7 +206,7 @@ export function pickRubric(
   dailyDoneDate: string | null = null,
   appStorePromo = false,
   secondDailyDoneDate: string | null = null,
-  rotation?: { lastUsed?: Record<string, string>; preferRegular?: boolean },
+  rotation?: RotationPick,
   provocationDoneDate: string | null = null,
 ): Rubric {
   const forced = project.rubrics.find((r) => r.id === forcedRubric);
@@ -200,7 +220,12 @@ export function pickRubric(
   const weighted = () => pickWeighted(project.rubrics.filter((r) => r !== alt && r !== daily && r !== promo && r !== second && r !== third && r.weight > 0), lastRubric, (r) => r.id);
   const regular = () => {
     if (project.id !== "oloid") return weighted();
-    const pool = eligibleRotationRubrics(project);
+    const pool = eligibleRotationRubrics(project, {
+      history: allHistory,
+      now,
+      lastUsed: rotation?.editorialUsed,
+      ...rotation?.editorial,
+    });
     return pool.length ? pickLeastRecent(pool, rotation?.lastUsed ?? {}) : weighted();
   };
   // Интервалы (dailyEveryDays, secondDailyEveryDays): несозревший слот проваливается дальше — в провокацию,
@@ -404,6 +429,10 @@ export async function makeDraft(opts: {
   dateHooks?: Record<string, string>;
   lastAskWasPoll?: boolean | null;
   mediaUsed?: Record<string, string>;
+  /** id дневника, кадра или отзыва → ISO. */
+  editorialUsed?: Record<string, string>;
+  /** Подмена одобренных источников в проверках. В бою не задаётся. */
+  editorial?: EditorialGate;
   /** Внеплановый пост «Олоида» на свободную тему: обычная рубрика, без магазинов, провокации и повода дня. */
   extraTheme?: string;
   /** Картинка к внеплановому посту (абсолютный https-адрес) вместо автоподбора. */
@@ -434,6 +463,7 @@ export async function makeDraft(opts: {
     dateHooks = {},
     lastAskWasPoll = null,
     mediaUsed = {},
+    editorialUsed = {},
     extraImage,
   } = opts;
   const project = pickProject(channel, lastProject, forcedProject);
@@ -454,6 +484,10 @@ export async function makeDraft(opts: {
     rubricUsed,
     projectHistory.map((item) => ({ id: item.rubric, at: item.at })),
   );
+  const editorialUsedMerged = mergeLastUsed(
+    editorialUsed,
+    projectHistory.map((item) => ({ id: item.editorialId, at: item.at })),
+  );
   // Внеплановый пост: только «Олоид», обычная рубрика без опроса, реплики и цифр — та, что дольше не выходила.
   const extraTheme = project.id === "oloid" ? opts.extraTheme : undefined;
   const extraLink = extraTheme ? opts.extraLink : undefined;
@@ -464,6 +498,8 @@ export async function makeDraft(opts: {
     : pickRubric(project, own, now, forcedRubric, history, dailyDoneDate, promoScheduled && nextCode != null, secondDailyDoneDate, {
         lastUsed: rubricLastUsed,
         preferRegular: dateHookDue != null,
+        editorialUsed: editorialUsedMerged,
+        editorial: opts.editorial,
       }, provocationDoneDate);
   const wanted = forcedTopic?.toLowerCase();
   const blockTopic = project.id === "oloid" ? (item: string) => topicRepeatsRecent(item, projectHistory, now) : undefined;
@@ -506,6 +542,20 @@ export async function makeDraft(opts: {
     return { project, rubricId: rubric.id, topic, topicTag, text: null, rejected: [DEV_NUMBERS_SKIP], skipReason: DEV_NUMBERS_SKIP, tone, regularCount };
   }
   if (devFact) topic = devFact.label;
+  const editorial = isOloidEditorialRubric(rubric.id)
+    ? pickEditorial(rubric.id, {
+        history: projectHistory,
+        now,
+        lastUsed: editorialUsedMerged,
+        ...opts.editorial,
+        ignoreCooldown: Boolean(forcedRubric) && !extraTheme,
+      })
+    : null;
+  if (isOloidEditorialRubric(rubric.id) && !editorial) {
+    const why = editorialSkipReason(rubric.id) ?? "редакционный источник недоступен";
+    return { project, rubricId: rubric.id, topic, topicTag, text: null, rejected: [why], skipReason: why, tone, regularCount };
+  }
+  if (editorial) topic = editorial.topic;
   // Пост с кодом: угол — тот, что дольше всех не был в постах App Store; ничья — по дате МСК.
   let promoAngle = rubric.id === OLOID_APP_STORE_PROMO_RUBRIC ? pickPromoAngle(history, now, [], wanted) : undefined;
   if (promoAngle) topic = promoAngle.label;
@@ -527,17 +577,27 @@ export async function makeDraft(opts: {
   const askWasPoll = lastAskWasPoll ?? (askFromHistory ? askFromHistory.poll === true : null);
   const wantPoll = provocation ? provocationWantsPoll(provocationCount) : rubric.id === OLOID_ASK_RUBRIC && askWasPoll !== true;
   const shown =
-    rotation && !wantPoll && !rubric.media && !extraImage
+    rotation && !editorial && !wantPoll && !rubric.media && !extraImage
       ? pickRegularShown(
           rubric.id,
           topic,
           mergeLastUsed(mediaUsed, projectHistory.map((item) => ({ id: item.mediaId, at: item.at }))),
         )
       : null;
-  const picture = rubric.media || wantPoll || shown || extraImage ? undefined : pickPicture(project, rubric, topic, history);
-  const media: Media | undefined = extraImage
-    ? { type: "IMAGE", url: extraImage, droppable: true }
-    : rubric.media ?? shown?.media ?? (picture && { type: "IMAGE", url: picture.url });
+  const picture = editorial || rubric.media || wantPoll || shown || extraImage ? undefined : pickPicture(project, rubric, topic, history);
+  const editorialMedia = editorial?.kind === "frame" ? frameMedia(editorial.frame) : editorial?.kind === "diary" ? diaryMedia(editorial.entry, opts.editorial?.fileExists) : undefined;
+  const media: Media | undefined = editorialMedia
+    ? editorialMedia
+    : extraImage
+      ? { type: "IMAGE", url: extraImage, droppable: true }
+      : rubric.media ?? shown?.media ?? (picture && { type: "IMAGE", url: picture.url });
+  const pictureNote = editorial?.kind === "frame"
+    ? editorial.frame.about
+    : editorial?.kind === "diary" && editorialMedia
+      ? editorial.entry.image?.about
+      : editorial
+        ? undefined
+        : picture?.about;
   const detective = project.id === "buro" ? pickDetectiveRef(history, project.forceNextRef) : undefined;
   const promoCode = promoCodeForRubric(rubric.id, nextCode, promoScheduled, forcedRubric);
   const promoLeft = promoCode ? OLOID_APP_STORE_CODES.length - spent.length - 1 : undefined;
@@ -561,8 +621,14 @@ export async function makeDraft(opts: {
     mediaId: shown?.id,
     provocationFormat: provocationFormat?.id,
     provocationCount,
+    editorialId: editorial?.id,
   };
   const withAngle = () => (vkAngle ? { vkAngle: vkAngle.id, topic: vkAngle.label } : {});
+
+  if (editorial?.kind === "frame") {
+    const pair = framePairProblem(media, editorial.frame);
+    if (pair) return { ...base, text: null, rejected: [pair], skipReason: pair };
+  }
 
   if (rubric.id === OLOID_APP_STORE_PROMO_RUBRIC && !promoCode) {
     const why = usedAppStoreCodes === null ? "список кодов в Redis недоступен, код не показываю" : "коды App Store закончились";
@@ -591,6 +657,14 @@ export async function makeDraft(opts: {
     vkAttempt: 0,
     vkRejected: [] as string[],
     factPack,
+    editorialSteer: editorial
+      ? editorialSteer(editorial, {
+          quiet,
+          withImage: Boolean(editorialMedia),
+          replyBudget: editorial.kind === "review" ? reviewReplyBudget(editorial.review, !quiet) : undefined,
+        })
+      : undefined,
+    suppressLink: editorial?.kind === "review",
   };
 
   // Пост с кодом: 3 попытки и ещё одна, у каждой свой угол и свои приёмы начала и финала.
@@ -617,16 +691,44 @@ export async function makeDraft(opts: {
       hints.vkAttempt = i;
       topic = vkAngle.label;
     }
-    const drafted = await draftPost(project, rubric, history, now, feedback, topic, channel.voiceNote, linkContent, picture?.about, detective?.hint, promoCode, hints);
+    const drafted = await draftPost(project, rubric, history, now, feedback, topic, channel.voiceNote, linkContent, pictureNote, detective?.hint, promoCode, hints);
     // Пост с кодом: скопированные указания задания («коротко скажи, что…:») срезаем до проверок.
-    const candidate = isPromo ? stripPromptMeta(drafted.text) : drafted.text;
+    // Отзыв: цитату, ник и ссылку ставит код. Модель пишет только ответ команды.
+    let candidate = isPromo ? stripPromptMeta(drafted.text) : drafted.text;
+    if (editorial?.kind === "review") {
+      const reviewLink = quiet ? undefined : (rubric.link ?? project.link)(now, linkContent);
+      const assembled = assembleReviewPost(candidate, editorial.review, { link: reviewLink });
+      if (!assembled) {
+        feedback = "не собрался ответ на отзыв";
+        rejected.push(`#${i + 1} ❌ ${feedback}\n${candidate}`);
+        continue;
+      }
+      candidate = assembled;
+    }
     const withOptions = [candidate, ...(drafted.options ?? [])].join("\n");
-    const check = () => factCheck(candidate, project, shown?.note ?? picture?.about, now, { rubricId: rubric.id, promoCode, devFact: devFact?.text, quiet, promoAngle, extraLink, extraCode });
+    const check = () => factCheck(candidate, project, editorial ? pictureNote : shown?.note ?? pictureNote, now, {
+      rubricId: rubric.id,
+      promoCode,
+      devFact: devFact?.text,
+      quiet,
+      promoAngle,
+      extraLink,
+      extraCode,
+      editorialFacts: editorial ? editorialFacts(editorial) : undefined,
+      editorialNote: editorial ? editorialFactNote(editorial) : undefined,
+    });
     // Заданный код в антиповтор не входит (ни в посте, ни в истории): совпадение по коду — не повтор.
-    const simText = extraCode ? stripExtraCode(candidate, extraCode) : candidate;
-    const simWithOptions = extraCode ? stripExtraCode(withOptions, extraCode) : withOptions;
+    // У отзыва и дневника из сравнения вынимается дословная вставка: повторяется ответ, не источник.
+    const simBare = editorial?.kind === "review"
+      ? reviewSimilarityText(candidate, editorial.review)
+      : editorial?.kind === "diary"
+        ? diarySimilarityText(candidate, editorial.entry)
+        : candidate;
+    const simText = extraCode ? stripExtraCode(simBare, extraCode) : simBare;
+    const simWithOptions = extraCode ? stripExtraCode(withOptions, extraCode) : editorial?.kind === "review" ? simBare : withOptions;
     const simHistory = extraCode ? history.map((h) => ({ ...h, text: stripExtraCode(h.text, extraCode) })) : history;
     const hard =
+      (editorial ? editorialProblem(candidate, editorial, media) : null) ??
       ruleCheck(candidate, project, now, rubric, linkContent, promoCode, quiet, devFact?.text, extraLink) ??
       (extraCode ? extraCodeProblem(candidate, extraCode) : null) ??
       (project.id === "oloid" ? spatulaProblem(withOptions) : null) ??
@@ -641,7 +743,7 @@ export async function makeDraft(opts: {
       ? null
       : repeatedEnding(simText, simHistory, project.id) ??
         tooSimilar(simText, simHistory, isPromo) ??
-        (project.id === "oloid" ? oloidRepeatProblem(simWithOptions, simHistory, now) : null);
+        (project.id === "oloid" ? oloidRepeatProblem(simWithOptions, simHistory, now, editorial?.kind === "frame" ? editorial.frame.detailIds : []) : null);
     let problem = hard ?? soft;
     if (!problem) {
       problem = await check();

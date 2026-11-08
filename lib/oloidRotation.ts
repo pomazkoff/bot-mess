@@ -2,10 +2,15 @@
 // App Store, VK Play и трейлер сюда не входят.
 
 import { OLOID_DEV_NUMBER_FACTS, OLOID_DEV_NUMBERS_RUBRIC } from "./devFacts.js";
+import { editorialRubricOpen, isOloidEditorialRubric, type EditorialGate } from "./oloidEditorial.js";
 import { OLOID_PROVOCATION_RUBRIC, type Project, type Rubric } from "./projects.js";
 
-/** Порядок — тай-брейк, когда рубрику ещё не постили. Первая в списке выходит первой. */
-export const OLOID_ROTATION_ORDER = ["backstage", "detail", "line", "ask", "petersburg", OLOID_DEV_NUMBERS_RUBRIC] as const;
+/**
+ * Порядок — тай-брейк, когда рубрику ещё не постили. Первая в списке выходит первой.
+ * Дневник, кадр и отзыв стоят в той же очереди. Источник на кулдауне или без файла
+ * вынимает рубрику из пула, слот берёт следующую обычную.
+ */
+export const OLOID_ROTATION_ORDER = ["backstage", "detail", "line", "ask", "petersburg", OLOID_DEV_NUMBERS_RUBRIC, "diary", "frame", "review"] as const;
 
 export const OLOID_LINE_RUBRIC = "line";
 export const OLOID_ASK_RUBRIC = "ask";
@@ -121,11 +126,13 @@ export function provocationHasLink(publishedCount: number): boolean {
   return Math.floor(publishedCount) % 2 === 1;
 }
 
-/** Рубрики, которые сейчас можно поставить в автослот. «Реплика» и «цифры» выпадают, пока их списки пусты. */
-export function eligibleRotationRubrics(project: Project): Rubric[] {
+/** Рубрики, которые сейчас можно поставить в автослот. «Реплика» и «цифры» выпадают, пока их списки пусты.
+ *  Дневник, кадр и отзыв выпадают, пока нет живого источника (пустой список, кулдаун, нет файла кадра). */
+export function eligibleRotationRubrics(project: Project, editorial?: EditorialGate): Rubric[] {
   return OLOID_ROTATION_ORDER.flatMap((id) => {
     if (id === OLOID_LINE_RUBRIC && OLOID_CHARACTER_LINES.length === 0) return [];
     if (id === OLOID_DEV_NUMBERS_RUBRIC && OLOID_DEV_NUMBER_FACTS.length === 0) return [];
+    if (isOloidEditorialRubric(id) && !editorialRubricOpen(id, editorial)) return [];
     const rubric = project.rubrics.find((item) => item.id === id);
     return rubric ? [rubric] : [];
   });
@@ -334,6 +341,15 @@ export function pickCharacterLine(lastUsed: Readonly<Record<string, string | und
 }
 
 const STORE_TONE_RUBRICS = new Set(["appstore", "appstore-promo", "vkplay", "trailer"]);
+
+export type RotationPick = {
+  lastUsed?: Record<string, string>;
+  preferRegular?: boolean;
+  /** id источника дневника, кадра или отзыва → ISO. */
+  editorialUsed?: Record<string, string>;
+  /** Подмена списков в проверках. В бою не задаётся. */
+  editorial?: EditorialGate;
+};
 
 export function toneNoteForRubric(tone: SlotTone, rubricId: string): string {
   if (rubricId === OLOID_PROVOCATION_RUBRIC) {

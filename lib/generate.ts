@@ -49,6 +49,8 @@ export type DraftHints = {
   vkAttempt?: number; // номер попытки vkplay: у каждой свой приём начала
   vkRejected?: string[]; // отклонённые варианты vkplay этого запуска
   factPack?: OloidPromptFacts | null; // факты «Олоида», выбранные makeDraft (id уходят в историю)
+  editorialSteer?: string; // дневник, кадр или отзыв: единственный одобренный источник
+  suppressLink?: boolean; // отзыв: ссылку и цитату ставит код, не модель
 };
 
 /** Внеплановый пост с заданным кодом: код должен стоять ровно так, заглавными. */
@@ -337,7 +339,9 @@ ${p.id === "buro" ? "\nМемная отсылка к детективному �
 ФОРМАТ: до ${MAX_LEN} символов вместе со ссылкой${p.id === "oloid" ? " (пустые строки между абзацами тоже считаются — пиши короткими абзацами по одной-две связанные фразы, не разбивай каждую фразу отдельной строкой)" : ""}. Живой текст, не пресс-релиз. Ответь ТОЛЬКО JSON без markdown:
 ${jsonShape}`;
 
-  const linkLine = provocation && quiet
+  const linkLine = hints?.suppressLink
+    ? "Ссылку не ставь и не пиши адрес. Не ставь ёлочки и не цитируй чужой текст: цитату, ник и ссылку добавит код."
+    : provocation && quiet
     ? "Ссылку не ставь и не показывай адрес. Не зови скачать, зайти на сайт, перейти или поиграть по ссылке. Это спор, не реклама. Последняя строка — вопрос или тезис, с которым хочется поспорить, даже если голос выше просит приглашение на сайт."
     : provocation
       ? `В самом конце, после пустой строки, поставь ссылку ровно так, без изменений: ${link} Это не реклама: не зови скачать, не пиши «переходи» и «по ссылке», цену не называй. Последняя строка перед ссылкой — вопрос для спора, новыми словами.`
@@ -351,7 +355,8 @@ ${jsonShape}`;
 
   const user = `Рубрика: ${rubric.brief}
 ${topic ? `Тема поста: ${topic}` : ""}
-${factPack ? oloidColorSteer(factPack.color, rubric.id) : ""}${factPack ? recentDetailNote(history) : ""}
+${factPack ? oloidColorSteer(factPack.color, rubric.id) : ""}${factPack && !hints?.editorialSteer ? recentDetailNote(history) : ""}
+${hints?.editorialSteer ?? ""}
 ${hints?.formatNote ? `Формат этого поста: ${hints.formatNote}` : ""}
 ${hints?.toneNote ? `Тон слота: ${hints.toneNote}` : ""}
 ${hints?.extraTheme ? `Тема этого внепланового поста: ${hints.extraTheme}; свяжи её с фактами об игре, ничего не выдумывай.` : ""}
@@ -807,15 +812,16 @@ export async function factCheck(
   p: Project,
   pictureNote?: string,
   now = new Date(),
-  opts?: { rubricId?: string; promoCode?: string; devFact?: string; quiet?: boolean; promoAngle?: PromoAngle; extraLink?: string; extraCode?: string },
+  opts?: { rubricId?: string; promoCode?: string; devFact?: string; quiet?: boolean; promoAngle?: PromoAngle; extraLink?: string; extraCode?: string; editorialFacts?: string[]; editorialNote?: string },
 ): Promise<string | null> {
   const extraNote =
     (opts?.extraLink ? `Ссылка ${opts.extraLink} задана автором поста — официальная страница «Олоида», не отклоняй из-за неё и из-за отсутствия UTM.\n` : "") +
-    (opts?.extraCode ? `Код ${opts.extraCode} задан автором поста — настоящий код, не отклоняй из-за него, его написания заглавными и упоминания кода.\n` : "");
+    (opts?.extraCode ? `Код ${opts.extraCode} задан автором поста — настоящий код, не отклоняй из-за него, его написания заглавными и упоминания кода.\n` : "") +
+    (opts?.editorialNote ?? "");
   const r = await askJson<{ ok: boolean; reason: string }>(
     `Ты строгий редактор-фактчекер. Проверь пост о проекте «${p.name}».
 ${p.id === "oloid" ? oloidCheckNote(opts?.rubricId, now) : ""}${extraNote}${rotationFactNote(opts?.rubricId, opts?.devFact, opts?.quiet)}${provocationFactNote(opts?.rubricId, opts?.quiet)}${appStoreFactNote(opts?.rubricId, opts?.promoCode, opts?.promoAngle)}${vkPlayFactNote(opts?.rubricId)}${p.id === "buro" ? `Отсылки к детективам — стиль и шутка, не факты о проекте. Допустимы только эти якоря, каждый своим героем:\n${BURO_DETECTIVE_REFS.map((ref) => `• ${ref.hint}`).join("\n")}\nНе отклоняй такую шутку, если она узнаваемая и не приписана чужому персонажу. Отклоняй, если пост утверждает, что сервис основан на фильме, снят по нему или связан с правообладателем, если цитата приписана не тому герою, если раскрыта развязка или описана жестокость, или если шутка непристойная.\n` : ""}Допустимые факты:
-${[...factsFor(p, now, opts?.rubricId), ...(opts?.promoCode && opts.promoAngle?.fact ? [opts.promoAngle.fact] : [])].map((f) => `• ${f}`).join("\n")}
+${[...factsFor(p, now, opts?.rubricId), ...(opts?.promoCode && opts.promoAngle?.fact ? [opts.promoAngle.fact] : []), ...(opts?.editorialFacts ?? [])].map((f) => `• ${f}`).join("\n")}
 Запрещено:
 ${forbiddenFor(p, opts?.rubricId, now).map((f) => `• ${f}`).join("\n")}
 ${pictureNote ? `\nК посту приложена картинка из игры: ${pictureNote}. Детали, которые на ней видны, допустимы.\n` : ""}

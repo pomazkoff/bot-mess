@@ -20,8 +20,8 @@ import {
   rotationSafetyProblem,
   usedDateHookIds,
 } from "./oloidRotation.js";
-import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_FROM, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RETIRED_CODES, PROJECTS, factsFor, nextAppStoreCode, oloidRedeemUrl, redactAppStoreCodes, spentAppStoreCodes } from "./projects.js";
-import { appStorePromoOpen, pickPicture, pickRubric } from "./run.js";
+import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_FROM, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RETIRED_CODES, OLOID_APP_STORE_URL, PROJECTS, factsFor, nextAppStoreCode, oloidRedeemUrl, redactAppStoreCodes, spentAppStoreCodes } from "./projects.js";
+import { appStorePromoOpen, makeDraft, pickPicture, pickRubric } from "./run.js";
 import type { HistoryItem } from "./store.js";
 import {
   OLOID_COLOR_FACTS_PER_POST,
@@ -35,6 +35,25 @@ import {
 import { briefThreadsError, containerSteps, pollAttachmentField } from "./threads.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { CHANNELS } from "./channels.js";
+import {
+  EDITORIAL_SKIP_REASON,
+  OLOID_DIARY_ENTRIES,
+  OLOID_FRAME_SOURCES,
+  OLOID_REVIEWS,
+  assembleReviewPost,
+  diaryMedia,
+  diaryProblem,
+  editorialRubricOpen,
+  frameMedia,
+  framePairProblem,
+  frameProblem,
+  mayRepublishWithoutMedia,
+  pickEditorial,
+  quoteToPublish,
+  reviewProblem,
+  reviewReplyBudget,
+} from "./oloidEditorial.js";
 import { pickRegularShown, shownAssetFiles } from "./variety.js";
 
 const oloid = PROJECTS.find((project) => project.id === "oloid");
@@ -61,7 +80,7 @@ assert.ok(devNumberProblem("209 коммитов и ещё 12", sunday.text));
 const pool = eligibleRotationRubrics(oloid);
 assert.deepEqual(
   pool.map((rubric) => rubric.id),
-  ["backstage", "detail", "ask", "petersburg", OLOID_DEV_NUMBERS_RUBRIC],
+  ["backstage", "detail", "ask", "petersburg", OLOID_DEV_NUMBERS_RUBRIC, "diary", "frame", "review"],
 );
 assert.equal(pool.some((rubric) => rubric.id === "line"), false);
 assert.equal(oloid.rubrics.find((rubric) => rubric.id === "atmosphere")?.weight, 0);
@@ -425,7 +444,7 @@ assert.equal(oloidRepeatProblem("снова музыкант", [{ project: "oloi
 for (const rubricId of ["appstore", "vkplay", "provocation"] as const) {
   const pack = oloidPromptFacts(factsFor(oloid, slot1730, rubricId), [], slot1730, { rubricId });
   assert.equal(pack.color.length, OLOID_COLOR_FACTS_PER_POST, rubricId);
-  assert.equal(pack.facts.some((fact) => fact.includes("500")), false, rubricId);
+  assert.equal(pack.facts.some((fact) => /(?<!\d)500(?!\d)/.test(fact)), false, rubricId);
 }
 const numberPack = oloidPromptFacts(factsFor(oloid, slot1730, "dev-numbers"), [], slot1730, { rubricId: "dev-numbers" });
 assert.deepEqual(numberPack.color, []);
@@ -463,6 +482,207 @@ const fourOptions = JSON.parse(pollAttachmentField({ option_a: "а", option_b: "
 assert.deepEqual(Object.keys(fourOptions), ["option_a", "option_b", "option_c", "option_d"]);
 assert.equal(briefThreadsError(new Error("Threads /me/threads: Param poll_attachment must be a valid JSON (#100/33)")).includes("poll_attachment"), true);
 assert.equal(briefThreadsError(new Error("x".repeat(400))).length, 220);
+
+const editorialPack = oloidPromptFacts(factsFor(oloid, evening, "diary"), [], evening, { rubricId: "diary" });
+assert.deepEqual(editorialPack.color, []);
+assert.deepEqual(editorialPack.ids, []);
+assert.equal(editorialPack.facts.some((fact) => fact.includes("199 ₽")), true);
+
+const recentStamp = "2026-10-24T17:00:00.000Z";
+const olderRubrics = {
+  backstage: recentStamp,
+  detail: recentStamp,
+  ask: recentStamp,
+  petersburg: recentStamp,
+  "dev-numbers": recentStamp,
+  frame: recentStamp,
+  review: recentStamp,
+};
+assert.equal(pickRubric(oloid, [recentTrailer], evening, undefined, [recentTrailer], day, false, day, { lastUsed: olderRubrics }).id, "diary");
+const cooledDiary: HistoryItem = {
+  project: "oloid",
+  rubric: "diary",
+  editorialId: "vera-face-older",
+  text: "лицо веры",
+  at: new Date(evening.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+};
+assert.equal(
+  pickRubric(oloid, [recentTrailer, cooledDiary], evening, undefined, [recentTrailer, cooledDiary], day, false, day, {
+    lastUsed: { ...olderRubrics, diary: "2020-01-01T00:00:00.000Z" },
+  }).id,
+  "backstage",
+);
+const restedDiary: HistoryItem = { ...cooledDiary, at: new Date(evening.getTime() - 8 * 24 * 60 * 60 * 1000).toISOString() };
+assert.equal(
+  pickRubric(oloid, [recentTrailer, restedDiary], evening, undefined, [recentTrailer, restedDiary], day, false, day, {
+    lastUsed: { ...olderRubrics, diary: restedDiary.at },
+  }).id,
+  "diary",
+);
+assert.equal(
+  pickRubric(oloid, [recentTrailer], evening, undefined, [recentTrailer], day, false, day, {
+    lastUsed: { ...olderRubrics, diary: "2020-01-01T00:00:00.000Z" },
+    editorial: { diary: [] },
+  }).id,
+  "backstage",
+);
+const frameOldest = { ...olderRubrics, frame: "2020-01-01T00:00:00.000Z", diary: recentStamp, review: recentStamp };
+assert.equal(pickRubric(oloid, [recentTrailer], evening, undefined, [recentTrailer], day, false, day, { lastUsed: frameOldest }).id, "frame");
+assert.equal(
+  pickRubric(oloid, [recentTrailer], evening, undefined, [recentTrailer], day, false, day, {
+    lastUsed: frameOldest,
+    editorial: { fileExists: () => false },
+  }).id,
+  "backstage",
+);
+assert.equal(editorialRubricOpen("diary", { now: evening, history: [cooledDiary] }), false);
+assert.equal(editorialRubricOpen("review", { now: evening, lastUsed: Object.fromEntries(OLOID_REVIEWS.map((review) => [review.id, recentStamp])) }), false);
+assert.equal(pickEditorial("review", { now: evening })?.id, OLOID_REVIEWS[0].id);
+assert.equal(pickEditorial("review", { now: evening, lastUsed: { [OLOID_REVIEWS[0].id]: recentStamp } })?.id, OLOID_REVIEWS[1].id);
+
+const oloidChannel = CHANNELS.find((item) => item.id === "oloid");
+assert.ok(oloidChannel);
+const skippedDiary = await makeDraft({
+  channel: oloidChannel,
+  history: [],
+  lastProject: null,
+  forcedProject: "oloid",
+  forcedRubric: "diary",
+  now: evening,
+  editorial: { diary: [] },
+});
+assert.equal(skippedDiary.text, null);
+assert.equal(skippedDiary.skipReason, EDITORIAL_SKIP_REASON.diary);
+const skippedFrame = await makeDraft({
+  channel: oloidChannel,
+  history: [],
+  lastProject: null,
+  forcedProject: "oloid",
+  forcedRubric: "frame",
+  now: evening,
+  editorial: { fileExists: () => false },
+});
+assert.equal(skippedFrame.text, null);
+assert.equal(skippedFrame.skipReason, EDITORIAL_SKIP_REASON.frame);
+
+const diary = OLOID_DIARY_ENTRIES[0];
+assert.equal(OLOID_DIARY_ENTRIES.length, 1);
+const diaryText = `лицо Веры перерисовали после отзыва «${diary.quote}».
+
+сделали старше, мимику оставили.
+
+а вам ближе строгое лицо или живое?
+
+${oloid.link(evening, "oloid-diary")}`;
+assert.equal(diaryProblem(diaryText, diary), null);
+assert.ok(diaryProblem(diaryText.replace("мимику оставили", "характер оставили"), diary));
+assert.ok(diaryProblem(diaryText.replace(`«${diary.quote}»`, "«выглядит молодо»"), diary));
+assert.ok(diaryProblem(`${diaryText}\n\nтак написал тестер`, diary));
+assert.ok(diaryProblem(`${diaryText}\n\nэто уже второй эпизод`, diary));
+assert.ok(diaryProblem(`${diaryText}\n\n«а давай переделаем»`, diary));
+assert.ok(diaryProblem(`${diaryText}\n\nэто было в 2024`, diary));
+assert.ok(diaryProblem(`${diaryText}\n\nлицо собрал ИИ`, diary));
+assert.equal(ruleCheck(diaryText, oloid, evening, oloid.rubrics.find((rubric) => rubric.id === "diary"), "oloid-diary"), null);
+assert.ok(diary.image);
+assert.equal(existsSync(join("public/media/oloid", diary.image.file)), true);
+assert.equal(diaryMedia(diary, () => false), undefined);
+assert.ok(diaryMedia(diary)?.url.endsWith(diary.image.file));
+
+for (const source of OLOID_FRAME_SOURCES) {
+  assert.equal(existsSync(join("public/media/oloid", source.file)), true, source.file);
+  const media = frameMedia(source);
+  assert.equal(media.type, "IMAGE");
+  assert.equal(framePairProblem(media, source), null, source.id);
+  assert.ok(framePairProblem({ type: "IMAGE", url: `${media.url}-other` }, source));
+  assert.equal(mayRepublishWithoutMedia("frame", media), false);
+}
+const courtyard = OLOID_FRAME_SOURCES.find((source) => source.id === "frame-courtyard-2018");
+const corridor = OLOID_FRAME_SOURCES.find((source) => source.id === "frame-corridor-day");
+const bar = OLOID_FRAME_SOURCES.find((source) => source.id === "frame-bar-v2");
+assert.ok(courtyard && corridor && bar);
+assert.equal(courtyard.file, "02_dvor_spb_2018.jpg");
+assert.notEqual(frameMedia(courtyard).url, frameMedia({ ...courtyard, file: "yard.jpg" }).url);
+assert.equal(corridor.file, "corridor-1.jpg");
+assert.ok(bar.file.endsWith("01_Loc_2018_bar_v2.jpg"));
+assert.equal(frameProblem("у арки стоит велосипед.", courtyard), null);
+assert.ok(frameProblem("велосипед, бельё, лужи и облезлая штукатурка.", courtyard));
+assert.ok(frameProblem("велосипед стоит у арки: этот двор снят с натуры, это прототип.", courtyard));
+assert.ok(frameProblem("велосипед у арки, а адрес — Раздольная, 21.", courtyard));
+assert.equal(frameProblem("в коридоре стоит красный пылесос.", corridor), null);
+assert.ok(frameProblem("пылесос можно взять в мини-игре.", corridor));
+assert.ok(frameProblem("рядом с пылесосом след проекта инвойс.", corridor));
+assert.equal(frameProblem("под кирпичным сводом горят лампы.", bar), null);
+assert.ok(frameProblem("по телевизору идёт чемпионат.", bar));
+assert.ok(frameProblem("под сводом в коридоре стоит пылесос.", bar));
+const frameRubric = oloid.rubrics.find((rubric) => rubric.id === "frame");
+assert.ok(frameRubric);
+const frameText = `у арки стоит велосипед, и двор от этого сразу живой.
+
+а у вашего двора есть такая примета?
+
+${oloid.link(evening, "oloid-frame")}`;
+assert.equal(frameProblem(frameText, courtyard), null);
+assert.equal(ruleCheck(frameText, oloid, evening, frameRubric, "oloid-frame"), null);
+assert.ok(ruleCheck(`${frameText}\n\nи ещё шпатель`, oloid, evening, frameRubric, "oloid-frame"));
+assert.ok(rotationSafetyProblem("в игре открыли достижения", "frame"));
+assert.ok(appStorePriceProblem("цена 199 ₽", "oloid", "appstore"));
+assert.equal(appStorePriceProblem("цена 199 ₽", "oloid", "review"), null);
+
+assert.equal(OLOID_REVIEWS.length, 3);
+assert.equal(JSON.stringify(OLOID_REVIEWS).includes("Mornkalabra"), false);
+assert.equal(JSON.stringify(OLOID_REVIEWS).includes("★"), false);
+const reviewRubric = oloid.rubrics.find((rubric) => rubric.id === "review");
+assert.ok(reviewRubric);
+for (const review of OLOID_REVIEWS) {
+  assert.equal(review.platform, "app-store");
+  assert.equal(review.appId, "6817809325");
+  assert.equal(review.sourceUrl, OLOID_APP_STORE_URL);
+  assert.equal(review.exportedOn, "2026-10-29");
+  assert.equal(quoteToPublish(review)?.excerpt, false);
+  const reply = "спасибо, что написали.";
+  assert.ok(reply.length <= reviewReplyBudget(review, true), review.id);
+  const post = assembleReviewPost(reply, review, { link: OLOID_APP_STORE_URL });
+  assert.ok(post, review.id);
+  assert.equal(reviewProblem(post, review), null, review.id);
+  assert.ok(post.includes(review.text), review.id);
+  assert.ok(post.includes(review.handle), review.id);
+  assert.ok(post.length <= 450, `${review.id} ${post.length}`);
+  assert.equal(ruleCheck(post, oloid, evening, reviewRubric, "oloid-review"), null, review.id);
+  assert.ok(post.endsWith(OLOID_APP_STORE_URL));
+  assert.equal(post.includes("utm_"), false);
+}
+const mufasa = OLOID_REVIEWS.find((review) => review.handle === "mufasa093");
+const odosinskiy = OLOID_REVIEWS.find((review) => review.handle === "Одосинский");
+const solnechny = OLOID_REVIEWS.find((review) => review.handle === "solnechny god");
+assert.ok(mufasa && odosinskiy && solnechny);
+const mufasaPost = assembleReviewPost("спасибо, что написали.", mufasa, { link: OLOID_APP_STORE_URL });
+assert.ok(mufasaPost);
+assert.ok(mufasaPost.includes("Олоид - первая"));
+assert.equal(mufasaPost.includes("олоид - первая"), false);
+assert.ok(mufasaPost.includes("🔥"));
+assert.ok(reviewProblem(mufasaPost.replace("Жду", "Ждём"), mufasa));
+assert.ok(reviewProblem(assembleReviewPost("второй эпизод выйдет скоро.", mufasa, { link: OLOID_APP_STORE_URL }) ?? "", mufasa));
+assert.ok(reviewProblem(mufasaPost.replace("спасибо", "спасибо ★"), mufasa));
+const pasted = assembleReviewPost("нам написали: Картинка, звук, музыка, сюжет – все. спасибо.", odosinskiy, { link: OLOID_APP_STORE_URL });
+assert.ok(pasted && reviewProblem(pasted, odosinskiy));
+assert.ok(assembleReviewPost("спасибо, что написали.", solnechny, { link: OLOID_APP_STORE_URL })?.includes("развилках \n\nбуду ждать второй эпизод"));
+assert.ok(assembleReviewPost("спасибо, что написали.", odosinskiy, { link: OLOID_APP_STORE_URL })?.includes("Одосинский"));
+assert.ok(assembleReviewPost("спасибо, что написали.", odosinskiy, { link: OLOID_APP_STORE_URL })?.includes("Ждем второй эпизод"));
+const quietReview = assembleReviewPost("спасибо, что написали.", odosinskiy);
+assert.ok(quietReview);
+assert.equal(quietReview.includes("http"), false);
+assert.equal(ruleCheck(quietReview, oloid, evening, reviewRubric, "oloid-review", undefined, true), null);
+const excerpt = { ...odosinskiy, id: "review-excerpt", excerpt: "все очень хорошо сделано" };
+assert.equal(quoteToPublish(excerpt)?.excerpt, true);
+const excerptPost = assembleReviewPost("спасибо, что написали.", excerpt, { link: OLOID_APP_STORE_URL });
+assert.ok(excerptPost?.includes("фрагмент отзыва"));
+assert.equal(excerptPost ? reviewProblem(excerptPost, excerpt) : "нет поста", null);
+assert.ok(excerptPost && reviewProblem(excerptPost.replace("все очень хорошо сделано", "всё очень хорошо"), excerpt));
+assert.equal(quoteToPublish({ ...odosinskiy, id: "broken", excerpt: "этой фразы нет в отзыве" }), null);
+assert.equal(mayRepublishWithoutMedia("diary", { type: "IMAGE", droppable: true }), true);
+assert.equal(mayRepublishWithoutMedia("backstage", { type: "IMAGE" }), true);
+assert.equal(mayRepublishWithoutMedia("trailer", { type: "VIDEO" }), false);
+assert.equal(mayRepublishWithoutMedia("ask", { type: "CAROUSEL", droppable: true }), true);
 
 console.log("selfcheck ok");
 console.log("--- sample backstage (not model) ---\n" + backstageText);
