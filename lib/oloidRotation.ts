@@ -2,6 +2,7 @@
 // App Store, VK Play и трейлер сюда не входят.
 
 import { OLOID_DEV_NUMBER_FACTS, OLOID_DEV_NUMBERS_RUBRIC } from "./devFacts.js";
+import { tiredOloidCopyProblem } from "./oloidFacts.js";
 import { editorialRubricOpen, isOloidEditorialRubric, type EditorialGate } from "./oloidEditorial.js";
 import { OLOID_PROVOCATION_RUBRIC, type Project, type Rubric } from "./projects.js";
 
@@ -232,7 +233,7 @@ export function slotToneNote(tone: SlotTone, opts?: { store?: boolean; numbersOn
       : "Утренний слот: пост короче обычного и легче. Без тяжёлой атмосферы. Две-три короткие фразы.";
   }
   if (tone === "evening") {
-    return "Вечерний слот, «для наушников»: можно гуще по атмосфере и опереться на факт, что играть лучше в наушниках и что половина работы — звук. Без хоррора, пожара и финала.";
+    return "Вечерний слот, «для наушников»: можно гуще по атмосфере и опереться на факт, что играть лучше в наушниках. Без хоррора, пожара и финала.";
   }
   return "Дневной слот: обычный голос, без утренней укороченности и без вечерней густоты.";
 }
@@ -324,6 +325,8 @@ export function pollOptionsProblem(options: readonly string[] | undefined): stri
   if (/https?:|\d|₽|хоррор|horror|пожар|финал|скелет|шпател|нейросет|(?<![\p{L}])ии(?![\p{L}])/iu.test(blob)) {
     return "опрос: варианты без чисел, ссылок, цены, спойлеров и шпателя";
   }
+  const tired = tiredOloidCopyProblem(blob);
+  if (tired) return `опрос: ${tired}`;
   return null;
 }
 

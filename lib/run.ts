@@ -1,6 +1,7 @@
 import { OLOID_DEV_NUMBER_FACTS, OLOID_DEV_NUMBERS_RUBRIC } from "./devFacts.js";
 import { appStoreCodeProblem, appStoreMomentProblem, appStorePriceProblem, detectiveRefProblem, draftPost, pickPromoAngle, promptMetaProblem, repeatedEnding, ruleCheck, similarityScore, stripPromptMeta, tooSimilar, extraCodeProblem, stripExtraCode, vkPlayProblem, vkPlayOpeningProblem, pickVkPlayAngle, factCheck, type PromoAngle, type VkPlayAngle } from "./generate.js";
-import { oloidPromptFacts, oloidRepeatProblem, spatulaProblem, topicRepeatsRecent } from "./oloidFacts.js";
+import { copyClosingsFor, copyHookForTopic, copyHooksFor, oloidCopyFactNote, oloidCopySteer, pickOloidCopyLine } from "./oloidCopy.js";
+import { oloidPromptFacts, oloidRepeatProblem, spatulaProblem, tiredOloidCopyProblem, topicRepeatsRecent } from "./oloidFacts.js";
 import {
   OLOID_ASK_RUBRIC,
   OLOID_LINE_RUBRIC,
@@ -87,6 +88,10 @@ export type Draft = {
   vkAngle?: string;
   /** id дневника, кадра или отзыва. Пишется после публикации, по нему источник отдыхает. */
   editorialId?: string;
+  /** Заход «Олоида». В историю пишется после публикации. */
+  copyHook?: string;
+  /** Вариант последней строки «Олоида». */
+  copyClosing?: string;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -601,8 +606,15 @@ export async function makeDraft(opts: {
   const detective = project.id === "buro" ? pickDetectiveRef(history, project.forceNextRef) : undefined;
   const promoCode = promoCodeForRubric(rubric.id, nextCode, promoScheduled, forcedRubric);
   const promoLeft = promoCode ? OLOID_APP_STORE_CODES.length - spent.length - 1 : undefined;
+  // Заход и концовка — одна на слот, кто дольше не выходил. Внеплановая тема заход не подменяет.
+  const hookPool = project.id === "oloid" && !extraTheme ? copyHooksFor(rubric.id) : [];
+  const closingPool = project.id === "oloid" ? copyClosingsFor(rubric.id) : [];
+  const copyHook = copyHookForTopic(topic, hookPool) ?? pickOloidCopyLine(hookPool, projectHistory, "copyHook");
+  const copyClosing = pickOloidCopyLine(closingPool, projectHistory, "copyClosing");
   // Редкие факты «Олоида» выбираем один раз: та же пачка на всех попытках, её id уходят в историю.
-  const factPack = project.id === "oloid" ? oloidPromptFacts(factsFor(project, now, rubric.id), projectHistory, now, { rubricId: rubric.id, topic }) : null;
+  // Строки захода и концовки держат в пачке факты, без которых тема не пишется.
+  const factTopic = [topic, copyHook?.line, copyClosing?.line].filter(Boolean).join("\n");
+  const factPack = project.id === "oloid" ? oloidPromptFacts(factsFor(project, now, rubric.id), projectHistory, now, { rubricId: rubric.id, topic: factTopic }) : null;
   const base = {
     factIds: factPack?.ids.length ? factPack.ids : undefined,
     project,
@@ -622,6 +634,8 @@ export async function makeDraft(opts: {
     provocationFormat: provocationFormat?.id,
     provocationCount,
     editorialId: editorial?.id,
+    copyHook: copyHook?.id,
+    copyClosing: copyClosing?.id,
   };
   const withAngle = () => (vkAngle ? { vkAngle: vkAngle.id, topic: vkAngle.label } : {});
 
@@ -665,6 +679,7 @@ export async function makeDraft(opts: {
         })
       : undefined,
     suppressLink: editorial?.kind === "review",
+    copySteer: oloidCopySteer(copyHook, copyClosing),
   };
 
   // Пост с кодом: 3 попытки и ещё одна, у каждой свой угол и свои приёмы начала и финала.
@@ -716,6 +731,7 @@ export async function makeDraft(opts: {
       extraCode,
       editorialFacts: editorial ? editorialFacts(editorial) : undefined,
       editorialNote: editorial ? editorialFactNote(editorial) : undefined,
+      copyNote: oloidCopyFactNote(copyHook, copyClosing),
     });
     // Заданный код в антиповтор не входит (ни в посте, ни в истории): совпадение по коду — не повтор.
     // У отзыва и дневника из сравнения вынимается дословная вставка: повторяется ответ, не источник.
@@ -731,7 +747,7 @@ export async function makeDraft(opts: {
       (editorial ? editorialProblem(candidate, editorial, media) : null) ??
       ruleCheck(candidate, project, now, rubric, linkContent, promoCode, quiet, devFact?.text, reviewLink ?? extraLink) ??
       (extraCode ? extraCodeProblem(candidate, extraCode) : null) ??
-      (project.id === "oloid" ? spatulaProblem(withOptions) : null) ??
+      (project.id === "oloid" ? spatulaProblem(withOptions) ?? tiredOloidCopyProblem(withOptions) : null) ??
       appStoreCodeProblem(candidate, project.id, rubric.id, promoCode) ??
       appStorePriceProblem(candidate, project.id, rubric.id) ??
       appStoreMomentProblem(candidate, project.id, rubric.id) ??
