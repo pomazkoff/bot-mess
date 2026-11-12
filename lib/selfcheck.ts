@@ -30,8 +30,10 @@ import {
   oloidRepeatProblem,
   repeatedDetailProblem,
   spatulaProblem,
+  tiredOloidCopyProblem,
   topicRepeatsRecent,
 } from "./oloidFacts.js";
+import { OLOID_COPY_HOOKS, copyClosingsFor, copyHooksFor, pickOloidCopyLine } from "./oloidCopy.js";
 import { briefThreadsError, containerSteps, pollAttachmentField } from "./threads.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -227,7 +229,7 @@ const yard = pickRegularShown("petersburg", "Двор-колодец доход�
 assert.ok(yard && (yard.id === "01_piter_mesta" || yard.id === "video-02-lokacii"));
 assert.equal(pickRegularShown("petersburg", "Конюшенная и фан-зона 2018 года", {})?.id, "05_atmosfera_2018");
 assert.equal(pickRegularShown("backstage", "Почему мини-игра протяжкой, а не кликом", {})?.id, "04_vybory_minigry");
-assert.equal(pickRegularShown("backstage", "Звук: половина работы и музыкант", {})?.id, "video-06-den");
+assert.equal(pickRegularShown("backstage", "одна акустическая гитара. ни одного другого инструмента. и этого хватило, чтобы стало не по себе", {})?.id, "video-06-den");
 assert.equal(
   pickRegularShown("petersburg", "Двор-колодец доходного дома", { "01_piter_mesta": "2026-10-02T00:00:00.000Z", "video-02-lokacii": "2026-10-01T00:00:00.000Z" })?.id,
   "video-02-lokacii",
@@ -244,7 +246,7 @@ assert.ok(backstage && ask && numbers);
 const link = (rubricId: string) => oloid.link(evening, `oloid-${rubricId}`);
 const backstageText = `ходили на экскурсии по петербургским коммуналкам — иначе двор в «Олоиде» был бы из головы.
 
-звук тут половина работы: музыку написал профессиональный музыкант, и вечером это слушается в наушниках.
+саундтрек — сольная акустическая гитара, и вечером это слушается в наушниках.
 
 а ваш старый дом чем гудит, когда все уже дома?
 
@@ -397,8 +399,58 @@ assert.equal(
 assert.equal(spatulaProblem("вытаскиваешь гвозди шпателем"), "шпатель не упоминать");
 assert.equal(spatulaProblem("движение руки, не клик"), null);
 assert.equal(ruleCheck("тут шпатель.", oloid, evening, backstage, "oloid-backstage"), "шпатель не упоминать");
-
+for (const bad of [
+  "шаги за стеной",
+  "звук шагов",
+  "шесть видов шагов",
+  "шаги по паркету",
+  "как шаг",
+  "звук — половина игры",
+  "звук - половина работы",
+  "звук делает половину игры",
+  "половина работы в игре сделана звуком",
+  "атмосфера и звук — половина работы",
+  "звуки за стеной",
+  "музыку написал TLENUM",
+]) {
+  assert.ok(tiredOloidCopyProblem(bad), bad);
+  assert.ok(ruleCheck(`${bad}\n\n${link("backstage")}`, oloid, evening, backstage, "oloid-backstage"), bad);
+}
+for (const ok of [
+  "человек шагнул к нам",
+  "сольная акустическая гитара",
+  "гитара, которая звучит у вас в голове ещё долго",
+  "92 звуковых эффекта",
+  "пять звуков дверей",
+  "играть лучше в наушниках",
+]) {
+  assert.equal(tiredOloidCopyProblem(ok), null, ok);
+}
+assert.equal(pollOptionsProblem(["шаги", "дверь"]), "опрос: шаги не упоминать");
+const memory = `семья, время и одна старая квартира, которая помнит больше, чем все её жильцы.\n\n${link("backstage")}`;
+assert.equal(ruleCheck(memory, oloid, evening, backstage, "oloid-backstage"), null);
+assert.ok(ruleCheck(`эта комната хранит больше, чем кажется.\n\n${link("backstage")}`, oloid, evening, backstage, "oloid-backstage"));
+assert.equal(/половин/iu.test(factBlob), false);
+assert.equal(tiredOloidCopyProblem(factBlob), null);
+assert.equal(tiredOloidCopyProblem(oloid.rubrics.map((rubric) => `${rubric.brief}\n${(rubric.topics ?? []).join("\n")}`).join("\n")), null);
+assert.equal(tiredOloidCopyProblem(OLOID_DEV_NUMBER_FACTS.map((fact) => fact.text).join("\n")), null);
+const aboutTopics = oloid.rubrics.find((rubric) => rubric.id === "about")?.topics ?? [];
+for (const hook of OLOID_COPY_HOOKS) assert.ok(aboutTopics.includes(hook.line), hook.id);
+assert.equal(copyHooksFor("backstage").length, OLOID_COPY_HOOKS.length);
+assert.equal(copyHooksFor("provocation").length, 0);
+assert.equal(copyHooksFor("appstore").length, 0);
+assert.equal(copyClosingsFor("appstore").length, 2);
+assert.equal(copyClosingsFor("appstore-promo").length, 0);
+assert.equal(copyClosingsFor("dev").some((line) => line.id === "outro-hours"), false);
+assert.equal(pickOloidCopyLine(OLOID_COPY_HOOKS, [], "copyHook")?.id, "deep-plot");
+assert.equal(
+  pickOloidCopyLine(OLOID_COPY_HOOKS, [{ project: "oloid", rubric: "ask", text: "x", at: "2026-11-01T00:00:00.000Z", copyHook: "deep-plot" }], "copyHook")?.id,
+  "guitar",
+);
 const passport = factsFor(oloid, slot1730, "backstage");
+const guitarLine = OLOID_COPY_HOOKS.find((hook) => hook.id === "guitar")!.line;
+assert.ok(oloidPromptFacts(passport, [], slot1730, { rubricId: "backstage", topic: guitarLine }).ids.includes("solo-guitar"));
+assert.ok(oloidPromptFacts(passport, [], slot1730, { rubricId: "ask", topic: "садишься на полчаса, а встаёшь через три. мы предупредили" }).ids.includes("playtime"));
 for (const spec of OLOID_ROTATING_FACTS) {
   assert.equal(passport.filter((fact) => fact.includes(spec.needle)).length, 1, spec.id);
 }
@@ -462,7 +514,7 @@ assert.equal(repeatedDetailProblem("опять клеёнка", [...fillers, old
 assert.ok(repeatedDetailProblem("клеёнка никуда не делась", [oldCloth, ...fillers.slice(0, 9)]));
 assert.equal(oloidRepeatProblem("просто мистическая новелла", fillers, slot1730), null);
 assert.ok(topicRepeatsRecent("Фанера, которую тянут рукой", [{ project: "oloid", rubric: "detail", text: "лист фанеры", at: cooledTable.at }], slot1730));
-assert.equal(topicRepeatsRecent("Звук: половина работы и музыкант", fillers, slot1730), false);
+assert.equal(topicRepeatsRecent("одна акустическая гитара. ни одного другого инструмента. и этого хватило, чтобы стало не по себе", fillers, slot1730), false);
 
 const steps = containerSteps("Геймдев", pollAttachmentField({ option_a: "игра", option_b: "книга" }));
 assert.equal(steps.length, 4);

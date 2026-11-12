@@ -102,7 +102,7 @@ export const OLOID_ROTATING_FACTS: readonly RotatingFact[] = [
   { id: "glossary", label: "глоссарий", needle: "45 статей", mark: /глоссар|45\s+стат/iu },
   { id: "oil-paint", label: "масляная живопись", needle: "интерфейс теплеет", mark: /маслян|интерфейс теплеет/iu },
   { id: "musician", label: "музыкант", needle: "профессиональный музыкант", mark: /музыкант/iu },
-  { id: "playtime", label: "2–3 часа", needle: "2–3 часов", mark: /2\s*[–—-]\s*3\s*час/iu },
+  { id: "playtime", label: "2–3 часа", needle: "2–3 часов", mark: /2\s*[–—-]\s*3\s*час/iu, topicMark: /садишься на полчаса|встаёшь через три|думать о нём будете дольше|полчаса/iu },
   { id: "disco", label: "Disco Elysium", needle: "Визуальный ориентир", mark: /disco|elysium|визуальн\p{L}*\s+ориентир/iu },
   { id: "audience", label: "кому зайдёт", needle: "кому понравится", mark: /кому понравится|старые дома и петербург/iu },
   { id: "aftertaste", label: "после прохождения", needle: "что хочется оставить", mark: /что хочется оставить|кто жил там до него/iu },
@@ -149,7 +149,6 @@ export const OLOID_ROTATING_FACTS: readonly RotatingFact[] = [
   { id: "extra-25", label: 'Ёлочка-а', needle: 'Ёлочка-а', topicMark: /салон машины/iu },
   { id: "extra-26", label: 'Оживший ', needle: 'Оживший ' },
   { id: "extra-27", label: 'Радио в ', needle: 'Радио в ', topicMark: /радио с нарисованной/iu },
-  { id: "extra-28", label: 'Шагов в ', needle: 'Шагов в ', topicMark: /видов шагов|звук старого дома/iu },
   { id: "extra-29", label: 'За окном', needle: 'За окном' },
   { id: "extra-30", label: 'Пение пт', needle: 'Пение пт', topicMark: /птицы во дворе/iu },
   { id: "extra-31", label: 'Для танч', needle: 'Для танч' },
@@ -190,6 +189,13 @@ export const OLOID_ROTATING_FACTS: readonly RotatingFact[] = [
   { id: "extra-81", label: 'Если зап', needle: 'Если зап' },
   { id: "extra-82", label: 'Голосов ', needle: 'Голосов ' },
   { id: "extra-83", label: 'Геймпадо', needle: 'Геймпадо' },
+  // Заходы 2026-11-10. В промпт — когда выбран этот заход (topicMark), не в каждый пост.
+  { id: "deep-plot", label: "многослойный сюжет", needle: "Сюжет многослойный", mark: /не одно дно|под каждым ответом прячется/iu, topicMark: /не одно дно|под каждым ответом|многослойный сюжет/iu },
+  { id: "solo-guitar", label: "сольная гитара", needle: "только сольная акустическая", mark: /ни одного другого инструмента|только сольная акустическая/iu, topicMark: /акустическ\p{L}*\s+гитар|ни одного другого инструмента/iu },
+  { id: "past-return", label: "вернуться в прошлое", needle: "не остаётся в прошлом", mark: /не остаётся в прошлом|в него можно вернуться/iu, topicMark: /не остаётся в прошлом|в него можно вернуться/iu },
+  { id: "family-secrets", label: "секреты древа", needle: "древе Егора есть секреты", mark: /семейное древо у него с секретами|древе егора есть секреты/iu, topicMark: /семейное древо у него|древе егора есть секреты/iu },
+  { id: "characters", label: "объёмные герои", needle: "своя причина молчать", mark: /своя причина молчать|свои страхи и своя причина/iu, topicMark: /своя причина молчать|свои страхи и своя|объёмные герои/iu },
+  { id: "family-time", label: "семья и время", needle: "связана с семьёй и со временем", mark: /семья, время и одна старая квартира/iu, topicMark: /семья, время и одна старая|семья и время/iu },
 ];
 
 export type OloidPromptFacts = {
@@ -344,5 +350,21 @@ export function oloidRepeatProblem(text: string, history: readonly HistoryItem[]
 /** Шпатель вычищен из фактов. Пост с этим словом не публикуем. */
 export function spatulaProblem(text: string): string | null {
   if (/шпател/iu.test(text)) return "шпатель не упоминать";
+  return null;
+}
+
+// Усталые формулы «Олоида» (2026-11-10). Черновик с ними пишется заново.
+// «шагнул» не трогаем: в цифрах разработки это крупный план, не звук шагов.
+const FOOTSTEPS = /(?<![\p{L}])шаг(?:а|и|ов|ам|ами|ах|ом|у|ал|ала|али|ать|ает|ают|ая)?(?![\p{L}])/iu;
+const SOUND_BEHIND_WALL = /звук\p{L}*(?:\s+\p{L}+){0,3}\s+за\s+стеной/iu;
+const SOUND_HALF =
+  /половин\p{L}*(?:[^\p{L}]+(?:игр|работ|звук)\p{L}*|(?:[^\p{L}]+\p{L}+){0,4}[^\p{L}]+(?:игр|работ|звук))|звук\p{L}*(?:[^\p{L}]+\p{L}+){0,6}[^\p{L}]*половин|дол(?:я|ю|и|е)\s+звук/iu;
+
+/** Шаги, звуки за стеной, «звук — половина игры/работы» и имя автора музыки. */
+export function tiredOloidCopyProblem(text: string): string | null {
+  if (FOOTSTEPS.test(text)) return "шаги не упоминать";
+  if (SOUND_BEHIND_WALL.test(text)) return "звуки за стеной не упоминать";
+  if (SOUND_HALF.test(text)) return "формулировку «звук — половина игры» не писать";
+  if (/tlenum/iu.test(text)) return "имя автора музыки не называть";
   return null;
 }

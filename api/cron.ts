@@ -143,7 +143,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       mediaUsed: rotation?.mediaUsed,
       editorialUsed: rotation?.editorialUsed,
     });
-    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, lineId, tone, regularCount, mediaId, provocationFormat, provocationCount, fallback, factIds, vkAngle, editorialId } = draft;
+    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, lineId, tone, regularCount, mediaId, provocationFormat, provocationCount, fallback, factIds, vkAngle, editorialId, copyHook, copyClosing } = draft;
     const where = `${channel.name} · ${project.name}`;
 
     // Ссылка VK Play ещё заглушка: пост не генерируем и не публикуем. День закрываем, чтобы следующий слот суток не пропускался тоже.
@@ -176,6 +176,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         dateHook,
         devFactId,
         editorialId,
+        copyHook,
+        copyClosing,
         tone,
         theme: theme || undefined,
         link: extraLink,
@@ -257,6 +259,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       factIds,
       vkAngle,
       editorialId,
+      copyHook,
+      copyClosing,
     });
     if (!theme) await setLastProject(channel, project.id);
     const promoLine = promoCode != null ? `\nПромокод: ${promoCode}. Осталось: ${promoLeft ?? 0}` : "";
@@ -267,6 +271,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       dateHook ? `повод ${dateHook}` : "",
       devFactId ? `факт ${devFactId}` : "",
       editorialId ? `источник ${editorialId}` : "",
+      copyHook ? `заход ${copyHook}` : "",
+      copyClosing ? `концовка ${copyClosing}` : "",
       provocationFormat ? `формат ${provocationFormat}` : "",
       fallback ? "запасной вариант: похоже на недавние, но жёсткие проверки и фактчек пройдены" : "",
       tone === "morning" ? "утро" : tone === "evening" ? "вечер" : tone === "day" ? "день" : "",

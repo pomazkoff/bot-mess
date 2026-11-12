@@ -48,6 +48,8 @@ export type HistoryItem = {
   factIds?: string[]; // id редких фактов «Олоида», выданных в промпт этого поста (очередь фактов)
   vkAngle?: string; // id угла рубрики vkplay
   editorialId?: string; // id дневника, кадра или отзыва. По нему источник отдыхает, а не рубрика целиком
+  copyHook?: string; // id захода «Олоида» (lib/oloidCopy.ts)
+  copyClosing?: string; // id варианта последней строки «Олоида»
 };
 
 const K = {
