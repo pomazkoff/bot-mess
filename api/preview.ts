@@ -69,7 +69,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const rotation = channel.projects.includes("oloid")
       ? await getOloidRotationState("oloid").catch((e) => ((redis = String(e?.message ?? e)), null))
       : null;
-    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, tone, mediaId, provocationFormat, editorialId, copyHook, copyClosing } = await makeDraft({
+    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, tone, mediaId, provocationFormat, editorialId, copyHook, copyClosing, studioSubject, studioFactId, studioLink } = await makeDraft({
       channel,
       history,
       lastProject,
@@ -118,6 +118,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       editorialId,
       copyHook,
       copyClosing,
+      studioSubject,
+      studioFactId,
+      studioLink,
       provocationFormat,
       tone,
       skipped: skipReason,

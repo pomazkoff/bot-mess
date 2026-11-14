@@ -3,6 +3,7 @@ import { OLOID_DEV_NUMBERS_RUBRIC, devNumberProblem, numberTokens } from "./devF
 import { oloidColorSteer, oloidPromptFacts, recentDetailNote, spatulaProblem, tiredOloidCopyProblem, type OloidPromptFacts } from "./oloidFacts.js";
 import { isOloidRotationRubric, provocationProblem, quietProblem, rotationSafetyProblem } from "./oloidRotation.js";
 import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, factsFor, forbiddenFor, mentionsPrice, mskCalendarDay, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_VKPLAY_FROM, OLOID_VKPLAY_RUBRIC, oloidRedeemUrl, promoActive, redactAppStoreCodes, type DetectiveRef, type Project, type Rubric } from "./projects.js";
+import { studioProperWord } from "./studio.js";
 import type { HistoryItem } from "./store.js";
 
 const client = new Anthropic(); // ANTHROPIC_API_KEY из env
@@ -52,6 +53,10 @@ export type DraftHints = {
   editorialSteer?: string; // дневник, кадр или отзыв: единственный одобренный источник
   suppressLink?: boolean; // отзыв: ссылку и цитату ставит код, не модель
   copySteer?: string; // заход и вариант последней строки «Олоида»
+  studioFacts?: string[]; // паспорт личного блога: кто говорит и один факт
+  studioSteer?: string;
+  studioLink?: string; // единственная ссылка поста @pomazkof
+  studioNoLink?: boolean;
 };
 
 /** Внеплановый пост с заданным кодом: код должен стоять ровно так, заглавными. */
@@ -351,8 +356,8 @@ export async function draftPost(
   const provocation = hints?.provocation === true;
   const jsonShape = wantPoll ? '{"text": "текст поста", "options": ["вариант", "вариант"]}' : '{"text": "текст поста"}';
 
-  const passport = factsFor(p, now, rubric.id);
-  const factPack = hints?.factPack !== undefined ? hints.factPack : p.id === "oloid" ? oloidPromptFacts(passport, history, now, { rubricId: rubric.id, topic }) : null;
+  const passport = hints?.studioFacts?.length ? hints.studioFacts : factsFor(p, now, rubric.id);
+  const factPack = hints?.studioFacts?.length ? null : hints?.factPack !== undefined ? hints.factPack : p.id === "oloid" ? oloidPromptFacts(passport, history, now, { rubricId: rubric.id, topic }) : null;
   const system = `Ты пишешь посты для Threads от лица автора проекта «${p.name}». Пишешь по-русски.
 
 ГОЛОС:
@@ -366,10 +371,14 @@ ${forbiddenFor(p, rubric.id, now).map((f) => `• ${f}`).join("\n")}
 • Любые утверждения о проекте, которых нет в фактах. Если не уверен — не пиши.
 ${p.id === "buro" ? "\nМемная отсылка к детективному фильму, сериалу или персонажу — шутка в голосе, не утверждение о проекте. Цитату не выдавай за факт о «Бюро», не приписывай чужому герою и не намекай, что сервис сделан по этому фильму.\n" : ""}
 
-ФОРМАТ: до ${MAX_LEN} символов вместе со ссылкой${p.id === "oloid" ? " (пустые строки между абзацами тоже считаются — пиши короткими абзацами по одной-две связанные фразы, не разбивай каждую фразу отдельной строкой)" : ""}. Живой текст, не пресс-релиз. Ответь ТОЛЬКО JSON без markdown:
+ФОРМАТ: до ${MAX_LEN} символов вместе со ссылкой${p.id === "oloid" || p.id === "studio" ? " (пустые строки между абзацами тоже считаются — пиши короткими абзацами по одной-две связанные фразы, не разбивай каждую фразу отдельной строкой)" : ""}. Живой текст, не пресс-релиз. Ответь ТОЛЬКО JSON без markdown:
 ${jsonShape}`;
 
-  const linkLine = hints?.suppressLink
+  const linkLine = hints?.studioLink
+    ? `В самом конце, после пустой строки, поставь ссылку ровно так, без точки и без других адресов: ${hints.studioLink}`
+    : hints?.studioNoLink
+      ? "Ссылку не ставь и не пиши адрес сайта или магазина. Вопрос читателю можно."
+      : hints?.suppressLink
     ? "Ссылку не ставь и не пиши адрес. Не ставь ёлочки и не цитируй чужой текст: цитату, ник и ссылку добавит код."
     : provocation && quiet
     ? "Ссылку не ставь и не показывай адрес. Не зови скачать, зайти на сайт, перейти или поиграть по ссылке. Это спор, не реклама. Последняя строка — вопрос или тезис, с которым хочется поспорить, даже если голос выше просит приглашение на сайт."
@@ -389,7 +398,7 @@ ${factPack ? oloidColorSteer(factPack.color, rubric.id) : ""}${factPack && !hint
 ${hints?.editorialSteer ?? ""}
 ${hints?.formatNote ? `Формат этого поста: ${hints.formatNote}` : ""}
 ${hints?.toneNote ? `Тон слота: ${hints.toneNote}` : ""}
-${hints?.copySteer ? `${hints.copySteer}\n` : ""}
+${hints?.copySteer ? `${hints.copySteer}\n` : ""}${hints?.studioSteer ? `${hints.studioSteer}\n` : ""}
 ${hints?.extraTheme ? `Тема этого внепланового поста: ${hints.extraTheme}; свяжи её с фактами об игре, ничего не выдумывай.` : ""}
 ${hints?.extraCode ? `Обязательно вставь в пост код ровно так, заглавными, без изменений и без ссылки вокруг: ${hints.extraCode}` : ""}
 ${hints?.extraLink ? `Единственная ссылка этого поста — ${hints.extraLink}, отдельным абзацем в конце. Других ссылок и адресов не ставь.` : ""}
@@ -406,7 +415,7 @@ ${rubric.id === OLOID_VKPLAY_RUBRIC && p.id === "oloid" ? vkPlayNote(hints?.vkAn
 ${season ? `Сезонный повод (по желанию): ${season}` : ""}
 ${detectiveHint ? `Обязательная отсылка в этом посте (мем, не факт о проекте и не связь с фильмом): ${detectiveHint}` : ""}
 
-Недавние посты — НЕ повторяй их заходы, формулировки, структуру${p.id === "buro" ? " и мемную детективную отсылку" : ""}${p.id === "oloid" ? (quiet ? " и последнюю строку" : " и последнюю строку перед ссылкой") : ""}:
+Недавние посты — НЕ повторяй их заходы, формулировки, структуру${p.id === "buro" || p.id === "studio" ? " и мемную детективную отсылку" : ""}${p.id === "oloid" ? (quiet ? " и последнюю строку" : " и последнюю строку перед ссылкой") : ""}:
 ${recent || "(пока нет)"}
 ${oloidEndingHint(p.id, history)}
 ${feedback ? `\nПредыдущий вариант отклонён: ${feedback}. Исправь.` : ""}`;
@@ -431,7 +440,7 @@ ${feedback ? `\nПредыдущий вариант отклонён: ${feedback
   const trimmed = parsed.text.trim();
   // Формат — до ruleCheck: пустые строки входят в лимит 450.
   // Сначала вёрстка (края строк), потом строчные: заглавная должна стоять в начале строки, а не после пробелов.
-  const formatted = p.id === "oloid" ? lowercaseSentenceStarts(normalizeOloidParagraphs(trimmed)) : trimmed;
+  const formatted = p.id === "oloid" || p.id === "studio" ? lowercaseSentenceStarts(normalizeOloidParagraphs(trimmed), p.id === "studio") : trimmed;
   // Строчный стиль не трогает заданный код: возвращаем его ровно в исходном виде.
   const text = hints?.extraCode ? restoreExtraCode(formatted, hints.extraCode) : formatted;
   const options = wantPoll ? parsed.options?.map((option) => option.trim()).filter(Boolean) : undefined;
@@ -443,7 +452,7 @@ ${feedback ? `\nПредыдущий вариант отклонён: ${feedback
 const OLOID_PROPER =
   /^(?:олоид\p{L}*|егор\p{L}*|яковлев\p{L}*|вер(?:а|ы|е|у|ой)|алик(?:а|у|ом|е)?|фед(?:я|и|е|ю|ей)|следовател\p{L}*|следак(?:а|у|ом|е)?|старушк\p{L}*|бабушк\p{L}*|сон(?:я|и|е|ю|ей)|disco|elysium|steam|android|ios|app|серафим\p{L}*|павловн\p{L}*|конюшенн\p{L}*|исаакиевск\p{L}*|зайчик\p{L}*|петербург(?:а|у|е|ом)?|санкт-петербург(?:а|у|е|ом)?|питер(?:а|у|е|ом)?|лиза|лизы|лизе|лизу|лизой|витя|вити|вите|витю|витей|тонет(?:а|у|е|ом)|ren|vk|mazkof)$/iu;
 
-export function lowercaseSentenceStarts(text: string): string {
+export function lowercaseSentenceStarts(text: string, studio = false): string {
   const urls: string[] = [];
   const codes: string[] = [];
   let masked = text.replace(/https?:\/\/\S+/g, (u) => {
@@ -465,7 +474,7 @@ export function lowercaseSentenceStarts(text: string): string {
       // Фраза «ИИ использовался как инструмент» должна остаться с заглавными ИИ, не «Ии».
       if (/^ии$/iu.test(word)) return lead + quotes + "ИИ";
       const head = first + restCaps;
-      if (OLOID_PROPER.test(word)) {
+      if (OLOID_PROPER.test(word) || (studio && studioProperWord(word))) {
         // «ПЕТЕРБУРГ» → «Петербург»; латиницу вроде VK не трогаем
         if (head === word && /^[А-ЯЁ]{2,}$/.test(word)) return lead + quotes + word[0] + word.slice(1).toLowerCase();
         return full;
@@ -531,7 +540,9 @@ export function ruleCheck(
   }
   if (text.length > MAX_LEN) return `длина ${text.length} > ${MAX_LEN}`;
   if ((text.match(EMOJI) || []).length > 1) return "больше одного эмодзи";
-  for (const re of BANNED) if (re.test(text)) return `запрещённый паттерн ${re}`;
+  if ((p.id === "buro" || p.id === "studio") && /жеглов|штирлиц|пуаро/iu.test(text)) return "Жеглов, Штирлиц и Пуаро не упоминать";
+  const withoutUrls = text.replace(/https?:\/\/\S+/g, " ");
+  for (const re of BANNED) if (re.test(re.source === "#\\S" ? withoutUrls : text)) return `запрещённый паттерн ${re}`;
   if (p.promo && text.toUpperCase().includes(p.promo.code)) {
     if (!promoActive(p, now)) return `промокод ${p.promo.code} больше не действует — убери его`;
     if (!rubric || !p.promo.rubrics.includes(rubric.id)) return `промокод ${p.promo.code} — только в постах-предложениях, здесь убери`;
@@ -847,8 +858,11 @@ export async function factCheck(
   p: Project,
   pictureNote?: string,
   now = new Date(),
-  opts?: { rubricId?: string; promoCode?: string; devFact?: string; quiet?: boolean; promoAngle?: PromoAngle; extraLink?: string; extraCode?: string; editorialFacts?: string[]; editorialNote?: string; copyNote?: string },
+  opts?: { rubricId?: string; promoCode?: string; devFact?: string; quiet?: boolean; promoAngle?: PromoAngle; extraLink?: string; extraCode?: string; editorialFacts?: string[]; editorialNote?: string; copyNote?: string; studioFacts?: string[]; detectiveNote?: boolean },
 ): Promise<string | null> {
+  const studioNote = p.id === "studio"
+    ? "Это личный пост Ильи, Mazkof Games. Строчные буквы, короткие абзацы и ссылка с новой строки — стиль, не отклоняй. Мнение про инди — не новый факт. Отклоняй вайбкодинг, слово «вайб», ИИ-агентов, названия инструментов и моделей, pull request, «лей», инфраструктуру, промокоды, реквизиты, спойлеры и любое утверждение, которого нет в фактах этого поста. Если ссылки нет — не требуй её. Если ссылка в конце есть и она из задания — не отклоняй из-за неё.\n"
+    : "";
   const extraNote =
     (opts?.extraLink ? `Ссылка ${opts.extraLink} задана автором поста — официальная страница «Олоида», не отклоняй из-за неё и из-за отсутствия UTM.\n` : "") +
     (opts?.extraCode ? `Код ${opts.extraCode} задан автором поста — настоящий код, не отклоняй из-за него, его написания заглавными и упоминания кода.\n` : "") +
@@ -856,11 +870,11 @@ export async function factCheck(
     (opts?.copyNote ?? "");
   const r = await askJson<{ ok: boolean; reason: string }>(
     `Ты строгий редактор-фактчекер. Проверь пост о проекте «${p.name}».
-${p.id === "oloid" ? oloidCheckNote(opts?.rubricId, now) : ""}${extraNote}${rotationFactNote(opts?.rubricId, opts?.devFact, opts?.quiet)}${provocationFactNote(opts?.rubricId, opts?.quiet)}${appStoreFactNote(opts?.rubricId, opts?.promoCode, opts?.promoAngle)}${vkPlayFactNote(opts?.rubricId)}${p.id === "buro" ? `Отсылки к детективам — стиль и шутка, не факты о проекте. Допустимы только эти якоря, каждый своим героем:\n${BURO_DETECTIVE_REFS.map((ref) => `• ${ref.hint}`).join("\n")}\nНе отклоняй такую шутку, если она узнаваемая и не приписана чужому персонажу. Отклоняй, если пост утверждает, что сервис основан на фильме, снят по нему или связан с правообладателем, если цитата приписана не тому герою, если раскрыта развязка или описана жестокость, или если шутка непристойная.\n` : ""}Допустимые факты:
-${[...factsFor(p, now, opts?.rubricId), ...(opts?.promoCode && opts.promoAngle?.fact ? [opts.promoAngle.fact] : []), ...(opts?.editorialFacts ?? [])].map((f) => `• ${f}`).join("\n")}
+${p.id === "oloid" ? oloidCheckNote(opts?.rubricId, now) : ""}${studioNote}${extraNote}${rotationFactNote(opts?.rubricId, opts?.devFact, opts?.quiet)}${provocationFactNote(opts?.rubricId, opts?.quiet)}${appStoreFactNote(opts?.rubricId, opts?.promoCode, opts?.promoAngle)}${vkPlayFactNote(opts?.rubricId)}${p.id === "buro" || opts?.detectiveNote ? `Отсылки к детективам — стиль и шутка, не факты о проекте. Допустимы только эти якоря, каждый своим героем:\n${BURO_DETECTIVE_REFS.map((ref) => `• ${ref.hint}`).join("\n")}\nНе отклоняй такую шутку, если она узнаваемая и не приписана чужому персонажу. Отклоняй, если пост утверждает, что сервис основан на фильме, снят по нему или связан с правообладателем, если цитата приписана не тому герою, если раскрыта развязка или описана жестокость, или если шутка непристойная. Жеглов, Штирлиц и Пуаро — отклоняй.\n` : ""}Допустимые факты:
+${[...(opts?.studioFacts?.length ? opts.studioFacts : factsFor(p, now, opts?.rubricId)), ...(opts?.promoCode && opts.promoAngle?.fact ? [opts.promoAngle.fact] : []), ...(opts?.editorialFacts ?? [])].map((f) => `• ${f}`).join("\n")}
 Запрещено:
 ${forbiddenFor(p, opts?.rubricId, now).map((f) => `• ${f}`).join("\n")}
-${pictureNote ? `\nК посту приложена картинка из игры: ${pictureNote}. Детали, которые на ней видны, допустимы.\n` : ""}
+${pictureNote ? (p.id === "studio" ? `\nК посту приложена картинка: ${pictureNote}. Не добавляй из неё факты и числа, которых нет в факте поста.\n` : `\nК посту приложена картинка из игры: ${pictureNote}. Детали, которые на ней видны, допустимы.\n`) : ""}
 Отклоняй, если в посте есть утверждение о проекте, которого нет в фактах (цифры, даты, цены, отзывы, истории клиентов, прогресс разработки), спойлер, или пост звучит как спам. Художественные образы и ирония без фактических утверждений допустимы.
 Ответь JSON: {"ok": true, "reason": ""} или {"ok": false, "reason": "кратко что не так"}`,
     text,

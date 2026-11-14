@@ -9,18 +9,23 @@ export type Channel = {
   projects: Project["id"][];
   voiceNote?: string; // поправка к голосу проекта для этого аккаунта
   paused?: boolean; // временная пауза публикации этого аккаунта (см. /api/cron)
+  /** Крон собирает пост как для публикации, но в Threads его не отправляет: текст, картинка и ссылка уходят в Telegram. */
+  draftOnly?: boolean;
 };
 
 export const CHANNELS: Channel[] = [
-  // Только «Бюро»: «Олоид» ведёт бренд-аккаунт. У @pomazkof три поста в день,
-  // у @oloid.vn четыре: 10:00, 15:00, 17:30 и 20:00 МСК.
-  // Временная пауза генерации «Бюро Этожеты!» (@pomazkof). Слоты 11:00, 16:00 и 21:00 МСК
-  // отвечают { skipped: "pomazkof paused" } и не шлют ошибку в Telegram.
-  // Заготовленные посты (lib/scheduled.ts) эта пауза не глушит.
-  // Олоид (@oloid.vn) и понедельничная сводка /api/stats не затрагиваются.
-  // Возобновить: убрать paused (или поставить false) и задеплоить.
-  // forceNextRef и BURO_FORCE_NEXT_REF_SINCE не трогать — они сработают на первом посте после снятия паузы.
-  { id: "pomazkof", name: "@pomazkof", tokenEnv: "THREADS_ACCESS_TOKEN", projects: ["buro"], paused: true },
+  // Личный блог Ильи обо всех проектах Mazkof Games. Слоты 11:00, 16:00 и 21:00 МСК.
+  // draftOnly: черновик в Telegram («черновик @pomazkof»), без публикации. Токен — THREADS_ACCESS_TOKEN.
+  // Снять черновики и начать публиковать: убрать draftOnly (или поставить false) и задеплоить. Других правок не нужно.
+  // @oloid.vn этот флаг не касается.
+  {
+    id: "pomazkof",
+    name: "@pomazkof",
+    tokenEnv: "THREADS_ACCESS_TOKEN",
+    projects: ["studio"],
+    draftOnly: true,
+    voiceNote: "Личный аккаунт Ильи. Пиши от первого лица («я делаю», «мы в Mazkof Games»), не от лица одной игры.",
+  },
   {
     id: "oloid",
     name: "@oloid.vn",

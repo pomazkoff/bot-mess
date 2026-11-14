@@ -38,6 +38,7 @@ import { briefThreadsError, containerSteps, pollAttachmentField } from "./thread
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CHANNELS } from "./channels.js";
+import { pickStudioSlot, studioFactIds, studioProblem } from "./studio.js";
 import {
   EDITORIAL_SKIP_REASON,
   OLOID_DIARY_ENTRIES,
@@ -793,6 +794,157 @@ assert.equal(mayRepublishWithoutMedia("diary", { type: "IMAGE", droppable: true 
 assert.equal(mayRepublishWithoutMedia("backstage", { type: "IMAGE" }), true);
 assert.equal(mayRepublishWithoutMedia("trailer", { type: "VIDEO" }), false);
 assert.equal(mayRepublishWithoutMedia("ask", { type: "CAROUSEL", droppable: true }), true);
+
+const pomazkof = CHANNELS.find((item) => item.id === "pomazkof");
+const oloidAccount = CHANNELS.find((item) => item.id === "oloid");
+assert.equal(pomazkof?.draftOnly, true);
+assert.equal(pomazkof?.paused, undefined);
+assert.deepEqual(pomazkof?.projects, ["studio"]);
+assert.equal(pomazkof?.tokenEnv, "THREADS_ACCESS_TOKEN");
+assert.deepEqual(oloidAccount?.projects, ["oloid"]);
+assert.equal(oloidAccount?.draftOnly, undefined);
+assert.equal(oloidAccount?.tokenEnv, "THREADS_ACCESS_TOKEN_OLOID");
+assert.ok(oloidAccount?.voiceNote?.includes("официальный аккаунт"));
+const buroProject = PROJECTS.find((project) => project.id === "buro");
+assert.ok(buroProject);
+assert.equal(buroProject.facts.some((fact) => fact.includes("100 ₽")), true);
+assert.equal(buroProject.facts.some((fact) => fact.includes("300")), false);
+assert.equal("forceNextRef" in buroProject, false);
+assert.equal(oloid.facts.some((fact) => fact.includes("Рейтинг 18+")), true);
+
+const studioNow = new Date("2026-11-14T13:00:00.000Z");
+const studioSlot = pickStudioSlot({ history: [], now: studioNow });
+assert.equal(studioSlot.rubricId, "how");
+assert.equal(studioSlot.subjectId, "oloid");
+assert.equal(studioSlot.factId, "oloid-hand");
+assert.equal(studioSlot.link, "https://mazkof.games/#oloid");
+assert.ok(studioSlot.media?.url.endsWith("/media/oloid/03_egor_tashchit_stol.jpg"));
+const studioHistory: HistoryItem[] = [
+  {
+    project: "studio",
+    rubric: studioSlot.rubricId,
+    text: "первый",
+    at: "2026-11-14T08:00:00.000Z",
+    studioSubject: studioSlot.subjectId,
+    studioFactId: studioSlot.factId,
+    channel: "pomazkof",
+  },
+];
+const studioSecond = pickStudioSlot({ history: studioHistory, now: studioNow });
+assert.equal(studioSecond.rubricId, "diary");
+assert.equal(studioSecond.subjectId, "tishina");
+assert.equal(studioSecond.factId, "tishina-launch");
+assert.equal(studioSecond.link, undefined);
+assert.notEqual(studioSecond.subjectId, studioSlot.subjectId);
+const studioThird = pickStudioSlot({
+  history: [
+    {
+      project: "studio",
+      rubric: studioSecond.rubricId,
+      text: "второй",
+      at: "2026-11-14T11:00:00.000Z",
+      studioSubject: studioSecond.subjectId,
+      studioFactId: studioSecond.factId,
+      channel: "pomazkof",
+    },
+    ...studioHistory,
+  ],
+  now: studioNow,
+});
+assert.equal(studioThird.rubricId, "news");
+assert.equal(studioThird.subjectId, "tvoyak");
+assert.equal(studioThird.factId, "tvoyak-play");
+assert.equal(studioThird.link, "https://mazkof.games/#tvoyak");
+assert.equal(studioThird.media, undefined);
+const studioSic = pickStudioSlot({ history: [], now: studioNow, forcedRubric: "diary", forcedTopic: "sic-mundus" });
+assert.equal(studioSic.subjectId, "sic-mundus");
+assert.equal(studioSic.link, undefined);
+assert.equal(studioSic.media, undefined);
+assert.equal(studioFactIds("tishina", "news", new Date("2026-11-14T10:00:00+03:00")).includes("tishina-event"), true);
+assert.equal(studioFactIds("tishina", "news", new Date("2026-11-21T13:55:00+03:00")).includes("tishina-event"), false);
+const studioKept = pickStudioSlot({
+  history: [{ project: "studio", rubric: "how", text: "x", at: "2026-11-14T01:00:00.000Z", studioSubject: "tishina", studioFactId: "oloid-hand", channel: "pomazkof" }],
+  now: studioNow,
+  forcedRubric: "how",
+  forcedTopic: "oloid",
+});
+assert.equal(studioKept.factId, "oloid-tours");
+const studioStats = pickStudioSlot({
+  history: ["komm-morning", "komm-out", "komm-mornings", "komm-avg", "komm-peak", "komm-return", "komm-ontime"].map((id, index) => ({
+    project: "studio" as const,
+    rubric: "news",
+    text: id,
+    at: new Date(Date.parse("2026-11-14T12:00:00.000Z") - index * 1000).toISOString(),
+    studioSubject: "oloid",
+    studioFactId: id,
+    channel: "pomazkof",
+  })),
+  now: studioNow,
+  forcedRubric: "news",
+  forcedTopic: "komm-players",
+});
+assert.equal(studioStats.factId, "komm-players");
+assert.ok(studioStats.media?.url.endsWith("/media/kommunalka/stats.jpg"));
+for (const file of ["tishina/01_pochta.jpg", "tishina/08_kozlyonok.jpg", "kommunalka/map.jpg", "kommunalka/stats.jpg", "kommunalka/liza.jpg"]) {
+  assert.equal(existsSync(join("public/media", file)), true, file);
+}
+
+const studioProject = PROJECTS.find((project) => project.id === "studio");
+assert.ok(studioProject);
+const studioHow = studioProject.rubrics.find((rubric) => rubric.id === "how");
+assert.ok(studioHow);
+const studioSampleHow = `мини-игры в «Олоиде» я делал не кнопкой.
+
+стол едет рывками, если тянуть его рукой. клик убрали.
+
+https://mazkof.games/#oloid`;
+const studioSampleDiary = `«Тишину» я хотел выпустить 11.11.2026.
+
+одобрение пришло — и 13.11.2026 она уже была в магазине.`;
+const studioSampleNews = `«Твояк» я включаю на большом экране.
+
+игроки отвечают с телефонов по коду. близкий ответ засчитает ии. сами они играют бесплатно.
+
+https://mazkof.games/#tvoyak`;
+assert.equal(studioProblem(studioSampleHow, studioSlot, studioNow), null);
+assert.equal(studioProblem(studioSampleDiary, studioSecond, studioNow), null);
+assert.equal(studioProblem(studioSampleNews, studioThird, studioNow), null);
+assert.equal(ruleCheck(studioSampleHow, studioProject, studioNow, studioHow, "pomazkof-how", undefined, false, undefined, studioSlot.link), null);
+assert.equal(ruleCheck(studioSampleDiary, studioProject, studioNow, studioProject.rubrics.find((rubric) => rubric.id === "diary"), "pomazkof-diary"), null);
+assert.equal(studioProblem("тексты пишет нейросеть под компанию.", { subjectId: "etozhety", factText: "Тексты дела пишет нейросеть под компанию.", link: undefined }, studioNow), null);
+assert.equal(studioProblem("ИИ использовался как инструмент.", { subjectId: "oloid", factText: "Нейросети использовались как инструмент, всё дорабатывалось вручную.", link: undefined }, studioNow), null);
+assert.equal(studioProblem("хаус-плейлист затихает.", { subjectId: "tvoyak", factText: "без цифр", link: undefined }, studioNow), null);
+for (const bad of [
+  "это вайбкодинг",
+  "навайбкожено вчера",
+  "нейросеть пишет код",
+  "ИИ-агент собрал уровень",
+  "открыл Cursor",
+  "спросил Claude",
+  "скинул pull request",
+  "лей в прод",
+  "https://threads.vercel.app/x",
+  "промокод OMSK",
+  "код GUEST",
+  "PLAYTEST внутри",
+  "ShopID в кабинете",
+  "наш ИНН",
+  "как Жеглов",
+  "дальняя дверь открылась",
+  "на карте 18937 шагов",
+]) {
+  assert.ok(studioProblem(bad, { subjectId: "oloid", factText: "без цифр", link: undefined }, studioNow), bad);
+}
+assert.equal(studioProblem("событие первые письма ещё идёт", { subjectId: "tishina", factText: "без цифр", link: undefined }, new Date("2026-11-14T10:00:00+03:00")), null);
+assert.ok(studioProblem("событие первые письма ещё идёт", { subjectId: "tishina", factText: "без цифр", link: undefined }, new Date("2026-11-22T00:00:00+03:00")));
+const draftIdx = cronSrc.indexOf("черновик @pomazkof");
+assert.ok(draftIdx > dryIdx && draftIdx < publishIdx);
+const vercel = JSON.parse(readFileSync(new URL("../vercel.json", import.meta.url), "utf8")) as { crons: { path: string; schedule: string }[] };
+assert.deepEqual(
+  vercel.crons.filter((item) => item.path.includes("channel=pomazkof")).map((item) => item.schedule),
+  ["0 8 * * *", "0 13 * * *", "0 18 * * *"],
+);
+assert.equal(vercel.crons.filter((item) => item.path.includes("channel=oloid")).length, 4);
 
 console.log("selfcheck ok");
 console.log("--- sample backstage (not model) ---\n" + backstageText);
