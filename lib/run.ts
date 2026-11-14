@@ -27,7 +27,8 @@ import {
   type RotationPick,
   type SlotTone,
 } from "./oloidRotation.js";
-import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, BURO_FORCE_NEXT_REF_SINCE, factsFor, mskCalendarDay, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_FROM, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_PROVOCATION_SLOT_HOUR_MSK, OLOID_PROVOCATION_SLOT_UNTIL_HOUR_MSK, OLOID_VKPLAY_RUBRIC, OLOID_VKPLAY_SKIP_REASON, OLOID_VKPLAY_SLOT_HOUR_MSK, PROJECTS, pickWeighted, spentAppStoreCodes, vkPlayUrlBlocked, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
+import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, factsFor, mskCalendarDay, nextAppStoreCode, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_FROM, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_PROVOCATION_SLOT_HOUR_MSK, OLOID_PROVOCATION_SLOT_UNTIL_HOUR_MSK, OLOID_VKPLAY_RUBRIC, OLOID_VKPLAY_SKIP_REASON, OLOID_VKPLAY_SLOT_HOUR_MSK, PROJECTS, pickWeighted, spentAppStoreCodes, vkPlayUrlBlocked, type DetectiveRef, type Media, type Picture, type Project, type Rubric } from "./projects.js";
+import { pickStudioSlot, studioDetectiveHistory, studioProblem, studioRubric } from "./studio.js";
 import type { HistoryItem } from "./store.js";
 import type { Channel } from "./channels.js";
 import { pickRegularShown } from "./variety.js";
@@ -92,6 +93,12 @@ export type Draft = {
   copyHook?: string;
   /** Вариант последней строки «Олоида». */
   copyClosing?: string;
+  /** Проект личного блога @pomazkof. Соседний пост берёт другой. */
+  studioSubject?: string;
+  /** Факт личного блога. Тот же id не раньше чем через 10 постов. */
+  studioFactId?: string;
+  /** Ссылка слота. Нет — пост без адреса. */
+  studioLink?: string;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -336,47 +343,13 @@ export function pickPicture(project: Project, rubric: Rubric, topic: string | un
   return top[Math.floor(Math.random() * top.length)];
 }
 
-/** Отсылка «Бюро», которой не было в последних 20 постах проекта; когда свежих не осталось — круг заново.
- *  forceNextRef — один раз, пока этого якоря нет в постах «Бюро» новее BURO_FORCE_NEXT_REF_SINCE.
- *  Если историю не удалось проверить, обычный выбор. */
-export function pickDetectiveRef(history: HistoryItem[], forceNextRef?: string): DetectiveRef {
-  const forced = forcedRefIfPending(history, forceNextRef);
-  if (forced) return forced;
+/** Отсылка «Бюро» / «Этожет», которой не было в последних 20 постах; когда свежих не осталось — круг заново. */
+export function pickDetectiveRef(history: HistoryItem[]): DetectiveRef {
   const recent = history.filter((h) => h.project === "buro").slice(0, BURO_DETECTIVE_LOOKBACK);
   const used = new Set(BURO_DETECTIVE_REFS.filter((r) => recent.some((h) => r.mark.test(h.text))).map((r) => r.id));
   const fresh = BURO_DETECTIVE_REFS.filter((r) => !used.has(r.id));
   const pool = fresh.length ? fresh : BURO_DETECTIVE_REFS;
   return pool[Math.floor(Math.random() * pool.length)];
-}
-
-/** Отсылка forceNextRef, если в видимой истории её ещё не было после метки коммита. Иначе null. */
-function forcedRefIfPending(history: HistoryItem[], forceNextRef?: string): DetectiveRef | null {
-  if (!forceNextRef) return null;
-  try {
-    const ref = BURO_DETECTIVE_REFS.find((r) => r.id === forceNextRef);
-    const since = Date.parse(BURO_FORCE_NEXT_REF_SINCE);
-    if (!ref || Number.isNaN(since) || !Array.isArray(history)) return null;
-
-    let oldest = Number.POSITIVE_INFINITY;
-    let sawDatedBuro = false;
-    for (const h of history) {
-      if (!h || h.project !== "buro" || typeof h.text !== "string") continue;
-      const at = typeof h.at === "string" ? Date.parse(h.at) : Number.NaN;
-      const hit = ref.mark.test(h.text);
-      if (Number.isNaN(at)) {
-        if (hit) return null;
-        continue;
-      }
-      sawDatedBuro = true;
-      if (at < oldest) oldest = at;
-      if (hit && at >= since) return null;
-    }
-    // Вся видимая лента «Бюро» новее метки, а якоря в ней нет: пост уже мог уйти из окна. Не повторяем.
-    if (sawDatedBuro && oldest >= since) return null;
-    return ref;
-  } catch {
-    return null;
-  }
 }
 
 /** Тема рубрики по очереди LRU: сначала темы, которых не было в истории, потом самые давние; при равенстве — случайно.
@@ -394,6 +367,58 @@ export function pickTopic(rubric: Rubric, history: HistoryItem[], blocked?: (top
   const oldest = Math.max(...pool.map(age));
   const ties = pool.filter((topic) => age(topic) === oldest);
   return ties[Math.floor(random() * ties.length)];
+}
+
+/** Личный блог @pomazkof. Ничего не публикует. Олоид сюда не заходит. */
+async function draftStudio(opts: {
+  project: Project;
+  channel: Channel;
+  history: HistoryItem[];
+  now: Date;
+  forcedRubric?: string;
+  forcedTopic?: string;
+}): Promise<Draft> {
+  const { project, channel, history, now, forcedRubric, forcedTopic } = opts;
+  const slot = pickStudioSlot({ history, now, forcedRubric, forcedTopic });
+  const rubric = studioRubric(slot.rubricId) ?? project.rubrics[0];
+  const detective = slot.needsDetective ? pickDetectiveRef(studioDetectiveHistory(history)) : undefined;
+  const topicTag = pickTopicTag(project, rubric, history);
+  const base = {
+    project,
+    rubricId: rubric.id,
+    topic: slot.topic,
+    topicTag,
+    media: slot.media,
+    quiet: !slot.link,
+    studioSubject: slot.subjectId,
+    studioFactId: slot.factId,
+    studioLink: slot.link,
+  };
+  let feedback: string | undefined;
+  const rejected: string[] = [];
+  for (let i = 0; i < MAX_ATTEMPTS; i++) {
+    const drafted = await draftPost(project, rubric, history, now, feedback, slot.topic, channel.voiceNote, `${channel.id}-${rubric.id}`, slot.pictureNote, detective?.hint, undefined, {
+      studioFacts: slot.facts,
+      studioSteer: slot.steer,
+      studioLink: slot.link,
+      studioNoLink: !slot.link,
+    });
+    const candidate = drafted.text;
+    const hard =
+      studioProblem(candidate, slot, now) ??
+      ruleCheck(candidate, project, now, rubric, `${channel.id}-${rubric.id}`, undefined, false, undefined, slot.link) ??
+      (detective ? detectiveRefProblem(candidate, studioDetectiveHistory(history), detective) : null);
+    const soft = hard ? null : tooSimilar(candidate, history);
+    let problem = hard ?? soft;
+    if (!problem) problem = await factCheck(candidate, project, slot.pictureNote, now, { rubricId: rubric.id, studioFacts: slot.facts, detectiveNote: slot.needsDetective });
+    if (problem) {
+      feedback = problem;
+      rejected.push(`#${i + 1} ❌ ${problem}\n${candidate}`);
+      continue;
+    }
+    return { ...base, text: candidate, rejected };
+  }
+  return { ...base, text: null, rejected };
 }
 
 /** Выбирает проект/рубрику и генерирует пост с проверками. Ничего не публикует и ничего не пишет в историю. */
@@ -472,6 +497,9 @@ export async function makeDraft(opts: {
     extraImage,
   } = opts;
   const project = pickProject(channel, lastProject, forcedProject);
+  if (project.id === "studio") {
+    return draftStudio({ project, channel, history, now, forcedRubric, forcedTopic });
+  }
 
   // «Не повторять прошлую рубрику» — по постам этого аккаунта. Интервал трейлера — по всей истории проекта.
   // Темы и антиповтор — тоже по всем аккаунтам, чтобы два аккаунта не выдавали одно и то же
@@ -603,7 +631,7 @@ export async function makeDraft(opts: {
       : editorial
         ? undefined
         : picture?.about;
-  const detective = project.id === "buro" ? pickDetectiveRef(history, project.forceNextRef) : undefined;
+  const detective = project.id === "buro" ? pickDetectiveRef(history) : undefined;
   const promoCode = promoCodeForRubric(rubric.id, nextCode, promoScheduled, forcedRubric);
   const promoLeft = promoCode ? OLOID_APP_STORE_CODES.length - spent.length - 1 : undefined;
   // Заход и концовка — одна на слот, кто дольше не выходил. Внеплановая тема заход не подменяет.

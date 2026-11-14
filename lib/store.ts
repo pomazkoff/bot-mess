@@ -50,6 +50,8 @@ export type HistoryItem = {
   editorialId?: string; // id дневника, кадра или отзыва. По нему источник отдыхает, а не рубрика целиком
   copyHook?: string; // id захода «Олоида» (lib/oloidCopy.ts)
   copyClosing?: string; // id варианта последней строки «Олоида»
+  studioSubject?: string; // проект студии в личном блоге @pomazkof
+  studioFactId?: string; // факт этого поста, чтобы не повторять его ~10 постов
 };
 
 const K = {

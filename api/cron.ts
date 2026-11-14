@@ -26,9 +26,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const channel = channelById(typeof req.query.channel === "string" ? req.query.channel : undefined);
   if (!channel) return res.status(400).json({ error: "неизвестный channel" });
   // Пауза отдельного аккаунта: PAUSED_<ID>=1 (например, PAUSED_OLOID), общая пауза — PAUSED.
-  // Кодовый выключатель channel.paused (сейчас @pomazkof) глушит только сгенерированные посты.
-  // Заготовленный пост проверяется раньше и выходит даже при channel.paused.
-  // Снять паузу генерации — убрать paused у канала в lib/channels.ts и задеплоить.
+  // channel.draftOnly (сейчас @pomazkof) генерирует пост и шлёт черновик в Telegram, в Threads не публикует.
+  // Заготовленные посты «Бюро» на канале студии не выходят: канал больше не ведёт проект buro.
   const channelPause = `PAUSED_${channel.id.toUpperCase()}`;
   if (process.env[channelPause]?.trim() === "1") return res.json({ skipped: `${channelPause}=1` });
 
@@ -51,7 +50,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const themeLine = theme ? `\nВнеплановый пост, тема: ${theme}${image ? `\nКартинка: ${image}` : ""}` : "";
   try {
     // Внеплановый пост заготовку не забирает: она выйдет в свой слот.
-    const scheduled = theme ? { kind: "none" as const } : await publishDueScheduled(channel, now, dry);
+    // Черновик и личный блог студии не публикуют старые ролики «Дела №1».
+    const holdLegacySeries = channel.id === "pomazkof" && !channel.projects.includes("buro");
+    const scheduled = theme || channel.draftOnly || holdLegacySeries ? { kind: "none" as const } : await publishDueScheduled(channel, now, dry);
     if (scheduled.kind !== "none") {
       const id = scheduled.post.id;
       if (scheduled.kind === "dry") {
@@ -143,7 +144,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       mediaUsed: rotation?.mediaUsed,
       editorialUsed: rotation?.editorialUsed,
     });
-    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, lineId, tone, regularCount, mediaId, provocationFormat, provocationCount, fallback, factIds, vkAngle, editorialId, copyHook, copyClosing } = draft;
+    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, lineId, tone, regularCount, mediaId, provocationFormat, provocationCount, fallback, factIds, vkAngle, editorialId, copyHook, copyClosing, studioSubject, studioFactId, studioLink } = draft;
     const where = `${channel.name} · ${project.name}`;
 
     // Ссылка VK Play ещё заглушка: пост не генерируем и не публикуем. День закрываем, чтобы следующий слот суток не пропускался тоже.
@@ -178,12 +179,61 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         editorialId,
         copyHook,
         copyClosing,
+        studioSubject,
+        studioFactId,
+        studioLink,
         tone,
         theme: theme || undefined,
         link: extraLink,
         code: extraCode,
         text,
         rejected,
+      });
+    }
+
+    if (channel.draftOnly) {
+      const image = media?.type === "CAROUSEL" ? media.urls?.[0] : media?.url;
+      await pushHistory({
+        channel: channel.id,
+        project: project.id,
+        rubric: rubricId,
+        topic,
+        topicTag,
+        text,
+        media: image,
+        at: now.toISOString(),
+        quiet,
+        dateHook,
+        devFactId,
+        lineId,
+        mediaId,
+        provocationFormat,
+        factIds,
+        vkAngle,
+        editorialId,
+        copyHook,
+        copyClosing,
+        studioSubject,
+        studioFactId,
+      }).catch((e) => console.error("history", e));
+      if (!theme) await setLastProject(channel, project.id);
+      const telegram = await notify(
+        [`черновик @pomazkof`, ``, text, ``, `картинка: ${image ?? "нет"}`, `ссылка: ${studioLink ?? "нет"}`].join("\n"),
+      );
+      return res.json({
+        posted: false,
+        draft: true,
+        draftOnly: true,
+        channel: channel.id,
+        project: project.id,
+        rubric: rubricId,
+        topic,
+        studioSubject,
+        studioFactId,
+        media: image,
+        link: studioLink,
+        telegram,
+        text,
       });
     }
 
@@ -261,6 +311,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       editorialId,
       copyHook,
       copyClosing,
+      studioSubject,
+      studioFactId,
     });
     if (!theme) await setLastProject(channel, project.id);
     const promoLine = promoCode != null ? `\nПромокод: ${promoCode}. Осталось: ${promoLeft ?? 0}` : "";

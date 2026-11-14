@@ -5,6 +5,7 @@ import { claimScheduled, isScheduledPublished, markScheduledPublished, releaseSc
 
 // Заготовленный пост публикуется как есть: без генерации и без фильтров, кроме длины.
 // Пауза канала (channel.paused) его не глушит — её проверяют после этого шага.
+// Канал @pomazkof эти ролики больше не берёт: там личный блог студии, не лента «Бюро».
 export type ScheduledPost = {
   id: string;
   channel: string;
