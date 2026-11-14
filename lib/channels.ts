@@ -15,8 +15,9 @@ export type Channel = {
 
 export const CHANNELS: Channel[] = [
   // Личный блог Ильи обо всех проектах Mazkof Games. Слоты 11:00, 16:00 и 21:00 МСК.
-  // draftOnly: черновик в Telegram («черновик @pomazkof»), без публикации. Токен — THREADS_ACCESS_TOKEN.
-  // Снять черновики и начать публиковать: убрать draftOnly (или поставить false) и задеплоить. Других правок не нужно.
+  // draftOnly: крон шлёт черновик в Telegram («черновик @pomazkof») с кнопками «Опубликовать» и «Пропустить».
+  // Сам крон в Threads не публикует. Токен — THREADS_ACCESS_TOKEN.
+  // Снять черновики и публиковать слот сразу: убрать draftOnly (или поставить false) и задеплоить.
   // @oloid.vn этот флаг не касается.
   {
     id: "pomazkof",

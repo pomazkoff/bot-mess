@@ -38,6 +38,21 @@ import { briefThreadsError, containerSteps, pollAttachmentField } from "./thread
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CHANNELS } from "./channels.js";
+import {
+  DRAFT_TTL_SEC,
+  chatAllowed,
+  claimDecision,
+  draftKeyboard,
+  draftTelegramText,
+  historyFromDraft,
+  newDraftId,
+  parseDraftCallback,
+  publishErrorText,
+  secretMatches,
+  withOutcome,
+  type PublishDraft,
+} from "./drafts.js";
+import { createMemoryDraftStore, handleDraftCallback, publishStoredDraft } from "./draftReview.js";
 import { pickStudioSlot, studioFactIds, studioProblem } from "./studio.js";
 import {
   EDITORIAL_SKIP_REASON,
@@ -937,9 +952,310 @@ for (const bad of [
 }
 assert.equal(studioProblem("событие первые письма ещё идёт", { subjectId: "tishina", factText: "без цифр", link: undefined }, new Date("2026-11-14T10:00:00+03:00")), null);
 assert.ok(studioProblem("событие первые письма ещё идёт", { subjectId: "tishina", factText: "без цифр", link: undefined }, new Date("2026-11-22T00:00:00+03:00")));
-const draftIdx = cronSrc.indexOf("черновик @pomazkof");
-assert.ok(draftIdx > dryIdx && draftIdx < publishIdx);
-const vercel = JSON.parse(readFileSync(new URL("../vercel.json", import.meta.url), "utf8")) as { crons: { path: string; schedule: string }[] };
+const draftIdx = cronSrc.indexOf("if (channel.draftOnly)");
+const draftEnd = cronSrc.indexOf("if (promoCode && !appStorePromoOpen", draftIdx);
+assert.ok(draftIdx > dryIdx && draftIdx < publishIdx && draftEnd > draftIdx);
+assert.equal(cronSrc.slice(draftIdx, draftEnd).includes("publishPost"), false);
+assert.ok(cronSrc.slice(draftIdx, draftEnd).includes("savePublishDraft"));
+assert.ok(cronSrc.slice(draftIdx, draftEnd).includes("draftKeyboard"));
+const draftCopy = readFileSync(new URL("./drafts.ts", import.meta.url), "utf8");
+assert.ok(draftCopy.includes("черновик @pomazkof"));
+assert.equal(DRAFT_TTL_SEC, 7 * 24 * 60 * 60);
+const freshId = newDraftId();
+assert.equal(parseDraftCallback(`pub:${freshId}`)?.action, "pub");
+assert.equal(parseDraftCallback(`skip:${freshId}`)?.id, freshId);
+assert.equal(parseDraftCallback("pub:ZZZZZZZZZZZZZZZZ"), null);
+assert.equal(parseDraftCallback("pub:../../etc/passwd"), null);
+assert.equal(parseDraftCallback("drop:aaaaaaaaaaaaaaaa"), null);
+const keys = draftKeyboard(freshId);
+assert.deepEqual(keys.map((row) => row.map((button) => button.text)), [["Опубликовать", "Пропустить"]]);
+assert.equal(keys[0][0].callback_data, `pub:${freshId}`);
+assert.equal(keys[0][1].callback_data, `skip:${freshId}`);
+assert.ok(Buffer.byteLength(keys[0][0].callback_data) <= 64);
+assert.ok(Buffer.byteLength(keys[0][1].callback_data) <= 64);
+assert.equal(secretMatches("sekret", "sekret"), true);
+assert.equal(secretMatches("sekret", "secret"), false);
+assert.equal(secretMatches("a", "ab"), false);
+assert.equal(secretMatches(undefined, "sekret"), false);
+assert.equal(secretMatches("", ""), false);
+assert.equal(chatAllowed(42, "42"), true);
+assert.equal(chatAllowed(42, " 42 "), true);
+assert.equal(chatAllowed(undefined, "42"), false);
+assert.equal(chatAllowed("-100", "-100"), true);
+const sampleDraft: PublishDraft = {
+  id: "aabbccddeeff0011",
+  channelId: "pomazkof",
+  projectId: "studio",
+  rubricId: "how",
+  text: "стол едет рывками.",
+  at: "2026-11-14T13:00:00.000Z",
+  status: "pending",
+  studioSubject: "oloid",
+  studioFactId: "oloid-hand",
+  studioLink: "https://mazkof.games/#oloid",
+  media: { type: "IMAGE", url: "https://threads-autopost-six.vercel.app/media/oloid/03_egor_tashchit_stol.jpg", droppable: true },
+};
+const draftText = draftTelegramText(sampleDraft);
+assert.ok(draftText.startsWith("черновик @pomazkof\n\nстол едет рывками."));
+assert.ok(draftText.includes("\nкартинка: https://threads-autopost-six.vercel.app/media/oloid/03_egor_tashchit_stol.jpg\n"));
+assert.ok(draftText.endsWith("ссылка: https://mazkof.games/#oloid"));
+const noted = withOutcome(draftText, "✅ Опубликовано\nhttps://www.threads.net/t/abc");
+assert.equal(withOutcome(noted, "✅ Опубликовано\nhttps://www.threads.net/t/abc"), noted);
+assert.ok(noted.endsWith("✅ Опубликовано\nhttps://www.threads.net/t/abc"));
+assert.equal(noted.includes("черновик @pomazkof"), true);
+const longError = publishErrorText(`access_token=secret ${"x".repeat(400)}`);
+assert.ok(longError.startsWith("Ошибка публикации: "));
+assert.equal(longError.includes("access_token=secret"), false);
+assert.ok(longError.length <= 200);
+assert.equal(claimDecision(null, true).kind, "missing");
+assert.equal(claimDecision({ ...sampleDraft, status: "published" }, true).kind, "published");
+assert.equal(claimDecision({ ...sampleDraft, status: "skipped" }, false).kind, "skipped");
+assert.equal(claimDecision(sampleDraft, false).kind, "busy");
+assert.equal(claimDecision(sampleDraft, true).kind, "go");
+
+type PressLog = { answers: { text?: string; alert?: boolean }[]; edits: string[]; replies: string[]; publishes: number };
+async function press(
+  data: string,
+  opts?: {
+    draft?: PublishDraft | null;
+    secret?: string;
+    webhookSecret?: string;
+    chat?: number | string;
+    allowedChat?: string;
+    publish?: () => Promise<{ postId: string; permalink?: string; mediaUrl?: string; clearMedia: boolean }>;
+    answerOk?: boolean;
+    store?: ReturnType<typeof createMemoryDraftStore>;
+  },
+): Promise<PressLog & { status: number; store: ReturnType<typeof createMemoryDraftStore> }> {
+  const draft = opts?.draft === undefined ? sampleDraft : opts.draft;
+  const store = opts?.store ?? createMemoryDraftStore(draft ?? undefined);
+  const answers: PressLog["answers"] = [];
+  const edits: string[] = [];
+  const replies: string[] = [];
+  let publishes = 0;
+  const status = (
+    await handleDraftCallback({
+      secretHeader: opts && "secret" in opts ? opts.secret : "sekret",
+      webhookSecret: opts && "webhookSecret" in opts ? opts.webhookSecret : "sekret",
+      allowedChatId: opts?.allowedChat === undefined ? "42" : opts.allowedChat,
+      update: {
+        callback_query: {
+          id: "cb-1",
+          data,
+          message: { message_id: 7, text: draft ? draftTelegramText(draft) : "черновик @pomazkof", chat: { id: opts?.chat ?? 42 } },
+        },
+      },
+      store,
+      publish: opts?.publish ?? (async () => {
+        publishes += 1;
+        return { postId: "post-1", permalink: "https://www.threads.net/@pomazkof/post/1", mediaUrl: draft?.media?.url, clearMedia: false };
+      }),
+      answer: async (_id, text, alert) => {
+        answers.push({ text, alert });
+        return opts?.answerOk !== false;
+      },
+      edit: async (_chat, _message, text) => {
+        edits.push(text);
+      },
+      reply: async (_chat, _message, text) => {
+        replies.push(text);
+      },
+    })
+  ).status;
+  return { status, store, answers, edits, replies, publishes };
+}
+
+const denied = await press(`pub:${sampleDraft.id}`, { secret: "no" });
+assert.equal(denied.status, 401);
+assert.equal(denied.answers.length, 0);
+assert.equal(denied.publishes, 0);
+const closed = await press(`pub:${sampleDraft.id}`, { webhookSecret: undefined });
+assert.equal(closed.status, 401);
+assert.equal(closed.publishes, 0);
+const foreign = await press(`pub:${sampleDraft.id}`, { chat: 99 });
+assert.equal(foreign.status, 200);
+assert.equal(foreign.publishes, 0);
+assert.equal(foreign.answers[0]?.text, "Недоступно");
+const garbage = await press("pub:nope");
+assert.equal(garbage.publishes, 0);
+assert.equal(garbage.answers.length, 1);
+assert.equal(garbage.answers[0]?.text, undefined);
+const stale = await press(`pub:${sampleDraft.id}`, { draft: null });
+assert.equal(stale.answers[0]?.text, "Черновик устарел");
+assert.equal(stale.answers[0]?.alert, true);
+assert.equal(stale.publishes, 0);
+
+const postStore = createMemoryDraftStore(sampleDraft);
+postStore.history.push({
+  channel: "pomazkof",
+  project: "studio",
+  rubric: "how",
+  text: sampleDraft.text,
+  at: sampleDraft.at,
+  media: sampleDraft.media?.url,
+});
+const posted = await press(`pub:${sampleDraft.id}`, { store: postStore });
+const postedAgain = await press(`pub:${sampleDraft.id}`, { store: postStore });
+assert.equal(posted.publishes, 1);
+assert.equal(postedAgain.publishes, 0);
+assert.equal(posted.answers.at(-1)?.text, "Опубликовано");
+assert.ok(posted.edits[0]?.includes("✅ Опубликовано"));
+assert.ok(posted.edits[0]?.includes("https://www.threads.net/@pomazkof/post/1"));
+assert.equal(posted.edits[0]?.includes("⏭"), false);
+assert.equal(postStore.drafts.get(sampleDraft.id)?.status, "published");
+assert.equal(postStore.drafts.get(sampleDraft.id)?.postId, "post-1");
+assert.equal(postedAgain.answers.at(-1)?.text, "Уже опубликовано");
+assert.equal(postStore.history.length, 1);
+assert.equal(postStore.history[0]?.postId, "post-1");
+assert.equal(postStore.history[0]?.media, sampleDraft.media?.url);
+
+const skipStore = createMemoryDraftStore(sampleDraft);
+const skipped = await press(`skip:${sampleDraft.id}`, { store: skipStore });
+const skippedLate = await press(`pub:${sampleDraft.id}`, { store: skipStore });
+assert.equal(skipped.publishes, 0);
+assert.equal(skippedLate.publishes, 0);
+assert.ok(skipped.edits[0]?.includes("⏭ Пропущено"));
+assert.equal(skipped.answers.at(-1)?.text, "Пропущено");
+assert.equal(skipStore.drafts.get(sampleDraft.id)?.status, "skipped");
+assert.equal(skippedLate.answers.at(-1)?.text, "Уже пропущено");
+
+let failed = true;
+const retryStore = createMemoryDraftStore(structuredClone(sampleDraft));
+const broken = await press(`pub:${sampleDraft.id}`, {
+  store: retryStore,
+  answerOk: false,
+  publish: async () => {
+    if (failed) throw new Error("Threads threads: rate limit");
+    return { postId: "post-2", clearMedia: false };
+  },
+});
+assert.equal(broken.publishes, 0);
+assert.ok(broken.answers[0]?.text?.startsWith("Ошибка публикации: "));
+assert.equal(broken.answers[0]?.alert, true);
+assert.equal(broken.edits.length, 0);
+assert.equal(broken.replies[0]?.startsWith("Ошибка публикации: "), true);
+assert.equal(retryStore.drafts.get(sampleDraft.id)?.status, "pending");
+failed = false;
+const retried = await press(`pub:${sampleDraft.id}`, {
+  store: retryStore,
+  publish: async () => ({ postId: "post-2", permalink: "https://www.threads.net/t/two", clearMedia: false }),
+});
+assert.equal(retried.publishes, 0);
+assert.equal(retryStore.drafts.get(sampleDraft.id)?.postId, "post-2");
+
+let started!: () => void;
+const gate = new Promise<void>((resolve) => {
+  started = resolve;
+});
+let entered = 0;
+const busyStore = createMemoryDraftStore(structuredClone(sampleDraft));
+const firstClick = press(`pub:${sampleDraft.id}`, {
+  store: busyStore,
+  publish: async () => {
+    entered += 1;
+    await gate;
+    return { postId: "post-3", clearMedia: false };
+  },
+});
+const secondClick = await press(`pub:${sampleDraft.id}`, { store: busyStore });
+assert.equal(entered, 1);
+assert.equal(secondClick.publishes, 0);
+assert.equal(secondClick.answers.at(-1)?.text, "Публикация уже идёт");
+started();
+await firstClick;
+assert.equal(busyStore.drafts.get(sampleDraft.id)?.postId, "post-3");
+assert.equal(busyStore.drafts.get(sampleDraft.id)?.status, "published");
+
+const historyOnly = createMemoryDraftStore();
+historyOnly.history.push({ channel: "pomazkof", project: "studio", rubric: "how", text: sampleDraft.text, at: sampleDraft.at, media: "https://img" });
+await historyOnly.recordPublication(historyFromDraft(sampleDraft, "post-9", undefined, true), { matchAt: sampleDraft.at, clearMedia: true });
+assert.equal(historyOnly.history[0]?.postId, "post-9");
+assert.equal(historyOnly.history[0]?.media, undefined);
+const freshHistory = createMemoryDraftStore();
+await freshHistory.recordPublication(historyFromDraft(sampleDraft, "post-8", sampleDraft.media?.url, false), { matchAt: sampleDraft.at, clearMedia: false });
+assert.equal(freshHistory.history[0]?.postId, "post-8");
+assert.equal(freshHistory.history[0]?.studioFactId, "oloid-hand");
+assert.equal(freshHistory.history[0]?.media, sampleDraft.media?.url);
+
+let mediaCalls: Array<string | undefined> = [];
+const dropped = await publishStoredDraft(sampleDraft, {
+  channel: pomazkof,
+  publishPost: async (media) => {
+    mediaCalls.push(media?.url);
+    if (media) throw new Error("картинка не принята");
+    return { id: "post-img" };
+  },
+  findExisting: async () => null,
+  permalink: async () => "not a url",
+});
+assert.deepEqual(mediaCalls, [sampleDraft.media?.url, undefined]);
+assert.equal(dropped.postId, "post-img");
+assert.equal(dropped.clearMedia, true);
+assert.equal(dropped.permalink, undefined);
+mediaCalls = [];
+const recovered = await publishStoredDraft(sampleDraft, {
+  channel: pomazkof,
+  publishPost: async () => {
+    throw new Error("не должны публиковать ещё раз");
+  },
+  findExisting: async () => "already",
+  permalink: async () => "https://www.threads.net/t/already",
+});
+assert.equal(recovered.postId, "already");
+assert.equal(mediaCalls.length, 0);
+const dup = Object.assign(new Error("уже есть"), { alreadyPublished: true });
+mediaCalls = [];
+await assert.rejects(
+  () =>
+    publishStoredDraft(
+      { ...sampleDraft, rubricId: "frame", media: { type: "IMAGE", url: "https://img/frame.jpg" } },
+      {
+        channel: pomazkof,
+        publishPost: async (media) => {
+          mediaCalls.push(media?.url);
+          throw dup;
+        },
+        findExisting: async () => null,
+        permalink: async () => undefined,
+      },
+    ),
+  (error: unknown) => error === dup,
+);
+assert.deepEqual(mediaCalls, ["https://img/frame.jpg"]);
+await assert.rejects(
+  () =>
+    publishStoredDraft(sampleDraft, {
+      channel: oloidAccount,
+      publishPost: async () => ({ id: "no" }),
+      findExisting: async () => "no",
+      permalink: async () => undefined,
+    }),
+  /кнопки/,
+);
+
+const telegramSrc = readFileSync(new URL("../api/telegram.ts", import.meta.url), "utf8");
+assert.ok(telegramSrc.includes("x-telegram-bot-api-secret-token"));
+assert.ok(telegramSrc.includes("TELEGRAM_WEBHOOK_SECRET"));
+assert.ok(telegramSrc.includes("TG_CHAT_ID"));
+assert.ok(telegramSrc.includes("publishPost"));
+assert.equal(telegramSrc.includes("THREADS_ACCESS_TOKEN_OLOID"), false);
+assert.ok(telegramSrc.includes("editMessageClearButtons"));
+assert.equal(previewSrc.includes("savePublishDraft"), false);
+assert.equal(previewSrc.includes("draftKeyboard"), false);
+const storeSrc = readFileSync(new URL("./store.ts", import.meta.url), "utf8");
+assert.ok(storeSrc.includes("claimDecision"));
+assert.ok(storeSrc.includes("threads:draft:"));
+assert.ok(storeSrc.includes("NX: true"));
+const webhookSrc = readFileSync(new URL("../scripts/set-telegram-webhook.mjs", import.meta.url), "utf8");
+assert.ok(webhookSrc.includes("setWebhook"));
+assert.ok(webhookSrc.includes("secret_token"));
+assert.ok(webhookSrc.includes('allowed_updates: ["callback_query"]'));
+assert.equal(/getUpdates\s*\(/.test(webhookSrc), false);
+const vercel = JSON.parse(readFileSync(new URL("../vercel.json", import.meta.url), "utf8")) as {
+  crons: { path: string; schedule: string }[];
+  functions: Record<string, { maxDuration: number }>;
+};
+assert.equal(vercel.functions["api/telegram.ts"]?.maxDuration, 300);
 assert.deepEqual(
   vercel.crons.filter((item) => item.path.includes("channel=pomazkof")).map((item) => item.schedule),
   ["0 8 * * *", "0 13 * * *", "0 18 * * *"],

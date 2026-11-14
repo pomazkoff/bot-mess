@@ -222,6 +222,19 @@ export async function ensureFreshToken(ch: Channel): Promise<string> {
 
 export type PublishedPost = { id: string; pollDropped?: boolean; pollError?: string };
 
+/** Ссылка на уже созданный пост. Нет permalink — публикация всё равно считается успешной. */
+export async function postPermalink(ch: Channel, postId: string): Promise<string | undefined> {
+  try {
+    const token = await ensureFreshToken(ch);
+    const json = await call("GET", `/${postId}`, { fields: "permalink", access_token: token });
+    const link = typeof json?.permalink === "string" ? json.permalink.trim() : "";
+    return /^https:\/\//.test(link) ? link : undefined;
+  } catch (e) {
+    console.warn("permalink:", e instanceof Error ? e.message : e);
+    return undefined;
+  }
+}
+
 /** Тело poll_attachment, как в документации: JSON с option_a…option_d. */
 export function pollAttachmentField(poll: PollAttachment): string {
   const body: Record<string, string> = { option_a: poll.option_a, option_b: poll.option_b };

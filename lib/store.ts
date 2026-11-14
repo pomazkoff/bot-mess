@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { createClient } from "redis";
 import type { Channel } from "./channels.js";
+import { claimDecision, DRAFT_ID_RE, DRAFT_LOCK_SEC, DRAFT_TTL_SEC, type ClaimResult, type PublishDraft } from "./drafts.js";
 
 // Redis из Vercel Marketplace (Redis или Upstash) — оба отдают REDIS_URL.
 // Подключение ленивое: без Redis функция не падает при загрузке, а внятно сообщает об ошибке.
@@ -281,4 +282,147 @@ export async function saveOloidRotation(
   if (patch.editorialId) ops.push(c.hSet(editorialUsedKey(projectId), patch.editorialId, patch.at));
   if (patch.askPoll != null) ops.push(c.set(askPollKey(projectId), patch.askPoll ? "1" : "0"));
   await Promise.all(ops);
+}
+
+// Черновик @pomazkof для кнопки в Telegram. Ключ живёт 7 суток. Замок — отдельный SET NX на время публикации.
+const draftKey = (id: string) => `threads:draft:${id}`;
+const draftLockKey = (id: string) => `threads:draft:${id}:lock`;
+
+async function readDraft(id: string): Promise<PublishDraft | null> {
+  if (!DRAFT_ID_RE.test(id)) return null;
+  const raw = await (await db()).get(draftKey(id));
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as PublishDraft;
+    if (!parsed || parsed.id !== id || typeof parsed.text !== "string") return null;
+    if (parsed.status !== "pending" && parsed.status !== "published" && parsed.status !== "skipped") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export async function savePublishDraft(draft: PublishDraft): Promise<void> {
+  if (!DRAFT_ID_RE.test(draft.id)) throw new Error("плохой id черновика");
+  const stored: PublishDraft = { ...draft, status: "pending" };
+  delete stored.postId;
+  delete stored.permalink;
+  await (await db()).set(draftKey(draft.id), JSON.stringify(stored), { EX: DRAFT_TTL_SEC });
+}
+
+export async function getPublishDraft(id: string): Promise<PublishDraft | null> {
+  return readDraft(id);
+}
+
+/** Замок берёт один вызов. Повтор, пока он держится, получает busy и пост не создаёт. */
+export async function claimPublishDraft(id: string): Promise<ClaimResult> {
+  if (!DRAFT_ID_RE.test(id)) return { kind: "missing" };
+  const c = await db();
+  const first = await readDraft(id);
+  if (!first || first.status !== "pending") return claimDecision(first, false);
+  const locked = await c.set(draftLockKey(id), new Date().toISOString(), { NX: true, EX: DRAFT_LOCK_SEC });
+  const acquired = locked === "OK";
+  try {
+    const fresh = await readDraft(id);
+    const decision = claimDecision(fresh, acquired && fresh?.status === "pending");
+    if (decision.kind !== "go" && acquired) await c.del(draftLockKey(id));
+    return decision;
+  } catch (error) {
+    if (acquired) await c.del(draftLockKey(id));
+    throw error;
+  }
+}
+
+export async function releaseDraftClaim(id: string): Promise<void> {
+  if (!DRAFT_ID_RE.test(id)) return;
+  await (await db()).del(draftLockKey(id));
+}
+
+/** Сохраняет статус, не продлевая 7 суток и не воскрешая уже истёкший ключ. */
+async function replaceDraft(id: string, next: PublishDraft): Promise<void> {
+  const c = await db();
+  const ttl = await c.ttl(draftKey(id));
+  if (ttl < 1) return;
+  await c.set(draftKey(id), JSON.stringify(next), { EX: ttl });
+}
+
+export async function markDraftPublished(id: string, postId: string, permalink?: string): Promise<void> {
+  if (!DRAFT_ID_RE.test(id)) return;
+  const c = await db();
+  const draft = await readDraft(id);
+  if (draft) {
+    const next: PublishDraft = { ...draft, status: "published", postId };
+    if (permalink) next.permalink = permalink;
+    else delete next.permalink;
+    await replaceDraft(id, next);
+  }
+  await c.del(draftLockKey(id));
+}
+
+export async function skipPublishDraft(id: string): Promise<"ok" | "missing" | "published" | "skipped" | "busy"> {
+  if (!DRAFT_ID_RE.test(id)) return "missing";
+  const c = await db();
+  const first = await readDraft(id);
+  if (!first) return "missing";
+  if (first.status === "published") return "published";
+  if (first.status === "skipped") return "skipped";
+  const locked = await c.set(draftLockKey(id), new Date().toISOString(), { NX: true, EX: DRAFT_LOCK_SEC });
+  if (locked !== "OK") {
+    const again = await readDraft(id);
+    if (!again) return "missing";
+    if (again.status === "published") return "published";
+    if (again.status === "skipped") return "skipped";
+    return "busy";
+  }
+  try {
+    const fresh = await readDraft(id);
+    if (!fresh) return "missing";
+    if (fresh.status === "published" || fresh.status === "skipped") return fresh.status;
+    await replaceDraft(id, { ...fresh, status: "skipped" });
+    return "ok";
+  } finally {
+    await c.del(draftLockKey(id));
+  }
+}
+
+/**
+ * Дописывает postId в уже лежащий черновик (тот же текст и время).
+ * Если крон не успел записать историю — кладёт полную запись, как обычная публикация.
+ */
+export async function recordDraftPublication(
+  item: HistoryItem,
+  opts: { matchAt: string; clearMedia: boolean },
+  attempt = 0,
+): Promise<void> {
+  const c = await db();
+  const rows = await c.lRange(K.history, 0, 199);
+  for (let i = 0; i < rows.length; i++) {
+    let parsed: HistoryItem;
+    try {
+      parsed = JSON.parse(rows[i]) as HistoryItem;
+    } catch {
+      continue;
+    }
+    if ((parsed.channel ?? "pomazkof") !== (item.channel ?? "pomazkof")) continue;
+    if (parsed.at !== opts.matchAt || parsed.text !== item.text) continue;
+    if (parsed.postId) return;
+    const next: HistoryItem = { ...parsed, postId: item.postId };
+    if (opts.clearMedia) {
+      delete next.media;
+      delete next.mediaId;
+    } else if (item.media) next.media = item.media;
+    const current = await c.lIndex(K.history, i);
+    if (current !== rows[i]) {
+      if (attempt === 0) return recordDraftPublication(item, opts, 1);
+      continue;
+    }
+    await c.lSet(K.history, i, JSON.stringify(next));
+    return;
+  }
+  const fresh: HistoryItem = { ...item };
+  if (opts.clearMedia) {
+    delete fresh.media;
+    delete fresh.mediaId;
+  }
+  await pushHistory(fresh);
 }

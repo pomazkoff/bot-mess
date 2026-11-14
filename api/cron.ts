@@ -4,7 +4,8 @@ import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RU
 import { postAlreadyPublished, publishPost } from "../lib/threads.js";
 import { mayRepublishWithoutMedia } from "../lib/oloidEditorial.js";
 import { OLOID_ASK_RUBRIC, isOloidRotationRubric } from "../lib/oloidRotation.js";
-import { getAppStoreCodesUsed, getAppStoreDay, getHistory, getLastProject, getOloidRotationState, getProvocationDay, getProvocationState, getVkPlayDay, markAppStoreCodeUsed, pushHistory, saveOloidRotation, saveProvocation, setAppStoreDay, setLastProject, setProvocationDay, setVkPlayDay } from "../lib/store.js";
+import { getAppStoreCodesUsed, getAppStoreDay, getHistory, getLastProject, getOloidRotationState, getProvocationDay, getProvocationState, getVkPlayDay, markAppStoreCodeUsed, pushHistory, saveOloidRotation, saveProvocation, savePublishDraft, setAppStoreDay, setLastProject, setProvocationDay, setVkPlayDay } from "../lib/store.js";
+import { draftKeyboard, draftTelegramText, newDraftId } from "../lib/drafts.js";
 import { notify } from "../lib/notify.js";
 import { channelById } from "../lib/channels.js";
 import { publishDueScheduled } from "../lib/scheduled.js";
@@ -193,6 +194,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (channel.draftOnly) {
       const image = media?.type === "CAROUSEL" ? media.urls?.[0] : media?.url;
+      const draftId = newDraftId();
+      const at = now.toISOString();
+      // Сначала Redis: кнопка pub:<id> не должна уйти на черновик, которого нет.
+      await savePublishDraft({
+        id: draftId,
+        channelId: channel.id,
+        projectId: project.id,
+        rubricId,
+        topic,
+        topicTag,
+        text,
+        media,
+        quiet,
+        poll,
+        dateHook,
+        devFactId,
+        lineId,
+        mediaId,
+        provocationFormat,
+        factIds,
+        vkAngle,
+        editorialId,
+        copyHook,
+        copyClosing,
+        studioSubject,
+        studioFactId,
+        studioLink,
+        at,
+        status: "pending",
+      });
       await pushHistory({
         channel: channel.id,
         project: project.id,
@@ -201,7 +232,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         topicTag,
         text,
         media: image,
-        at: now.toISOString(),
+        at,
         quiet,
         dateHook,
         devFactId,
@@ -217,13 +248,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         studioFactId,
       }).catch((e) => console.error("history", e));
       if (!theme) await setLastProject(channel, project.id);
-      const telegram = await notify(
-        [`черновик @pomazkof`, ``, text, ``, `картинка: ${image ?? "нет"}`, `ссылка: ${studioLink ?? "нет"}`].join("\n"),
-      );
+      const telegram = await notify(draftTelegramText({ text, media, studioLink }), draftKeyboard(draftId));
       return res.json({
         posted: false,
         draft: true,
         draftOnly: true,
+        draftId,
         channel: channel.id,
         project: project.id,
         rubric: rubricId,
