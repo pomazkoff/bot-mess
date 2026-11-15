@@ -626,7 +626,7 @@ export function editorialFactNote(pick: EditorialPick): string {
     return "Это пост одной видимой детали одного кадра. Детали из описания кадра можно. Отклоняй реальный прототип двора, адрес Раздольная, чемпионат, предысторию «Инвойс», кто и зачем поставил вещь, игровую механику этих вещей и детали, которых нет на этом кадре.\n";
   }
   const where = reviewPlatformLabel(pick.review.platform);
-  return `Цитата в ёлочках — дословный отзыв из ${where}. Не отклоняй её регистр, опечатки, эмодзи и слова игрока про следующие эпизоды внутри ёлочек. Отклоняй звёзды, число отзывов, сводку «всем нравится», ответ команды с датой или частотой выхода и любые фразы ответа разработчика. Никнейм дословный. ${pick.review.platform === "vk-play" ? "Ссылка App Store и цена в этом посте не нужны." : "Ссылка VK Play в этом посте не нужна."}\n`;
+  return `Цитата в ёлочках — дословный отзыв из ${where}. Не отклоняй её регистр, опечатки, эмодзи и слова игрока про следующие эпизоды внутри ёлочек. Отклоняй звёзды, число отзывов, сводку «всем нравится», ответ команды с датой или частотой выхода и любые фразы ответа разработчика. В ответе команды отклоняй финал, концовку, развязку и слова, что человек дошёл, доиграл или дочитал до конца: это намёк на финал. Короткую благодарность без этих слов не отклоняй. Никнейм дословный. ${pick.review.platform === "vk-play" ? "Ссылка App Store и цена в этом посте не нужны." : "Ссылка VK Play в этом посте не нужна."}\n`;
 }
 
 export function editorialSteer(pick: EditorialPick, opts?: { quiet?: boolean; replyBudget?: number; withImage?: boolean }): string {
@@ -650,7 +650,7 @@ export function editorialSteer(pick: EditorialPick, opts?: { quiet?: boolean; re
   const where = reviewPlatformLabel(pick.review.platform);
   const mixed = pick.review.mixed ? " Отзыв с оговорками: не делай вид, что все отзывы сплошная похвала." : "";
   const vk = pick.review.platform === "vk-play" ? " Площадка — VK Play: не упоминай App Store и не называй цену." : "";
-  return `Напиши только ответ команды на отзыв в ${where}, ${budget} символов или короче, одна-две короткие фразы. Цитату, ник, дату и ссылку не пиши и не ставь ёлочки: их добавит код. Не пересказывай отзыв. Не обещай дату, не подтверждай число или частоту эпизодов, не пиши «в скором времени» и «не через год», не ставь звёзды и не пиши, что игра всем нравится.${mixed}${vk}${opts?.quiet ? " Ссылку не проси." : ""}`;
+  return `Напиши только ответ команды на отзыв в ${where}, ${budget} символов или короче, одна-две короткие фразы, строчными буквами. Цитату, ник, дату и ссылку не пиши и не ставь ёлочки: их добавит код дословно, абзацами. Не пересказывай отзыв. Не обещай дату, не подтверждай число или частоту эпизодов, не пиши «в скором времени» и «не через год», не ставь звёзды и не пиши, что игра всем нравится. Нельзя финал, концовку, развязку и любые слова о прохождении до конца: «дошли до конца», «доиграл», «дочитал», «до финала». Такой ответ отклоняется. Благодарность только нейтральная, например: «спасибо за такие слова, ради них и делаем игру» или «спасибо, что поделились впечатлениями».${mixed}${vk}${opts?.quiet ? " Ссылку не проси." : ""}`;
 }
 
 /** Сколько символов остаётся ответу, когда цитата, ник и ссылка уже стоят. */
@@ -665,6 +665,47 @@ export function reviewReplyBudget(review: ReviewSource, withLink: boolean): numb
   return Math.max(0, 450 - quote - attr - link - gaps);
 }
 
+// Намёк, что игрок дошёл до конца: финал, концовка, «до конца». «в конце» и «в конце концов» не то.
+// Цитату сюда не передаём: её снимают выше, а assembleReviewPost ставит текст игрока заново.
+const REVIEW_REPLY_FINALE =
+  /до(?:\s+\p{L}+){0,2}\s+конца|финал|концовк|развязк|доигра|дочита|конц(?:а|е|у|ом)\s+(?:игры|эпизода|истории|прохождения)|(?<![\p{L}])(?:прошли|прошёл|прошла|прошел)(?![\p{L}])(?:\s+\p{L}+){0,3}\s+(?:игру|эпизод|историю|новеллу)|(?<![\p{L}])закончил\p{L}*(?:\s+\p{L}+){0,3}\s+(?:игру|эпизод|историю|прохождение|новеллу)/iu;
+
+const NEUTRAL_REVIEW_THANKS = [
+  "спасибо за такие слова, ради них и делаем игру.",
+  "спасибо, что поделились впечатлениями.",
+] as const;
+
+function neutralReviewThanks(review: ReviewSource): string {
+  let sum = 0;
+  for (let i = 0; i < review.id.length; i++) sum += review.id.charCodeAt(i);
+  return NEUTRAL_REVIEW_THANKS[sum % NEUTRAL_REVIEW_THANKS.length];
+}
+
+function withoutFinaleSentences(paragraph: string): string {
+  return paragraph
+    .split(/(?<=[.!?…])\s+/u)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence && !REVIEW_REPLY_FINALE.test(sentence))
+    .join(" ");
+}
+
+/** Снимает из ответа команды фразы про финал и «дошли до конца». Цитату игрока не получает. */
+function neutralizeReviewFinale(reply: string, review: ReviewSource): string {
+  if (!reply.trim() || !REVIEW_REPLY_FINALE.test(reply)) return reply;
+  const kept = reply.split(/\n{2,}/).map(withoutFinaleSentences).filter(Boolean);
+  return kept.length ? kept.join("\n\n") : neutralReviewThanks(review);
+}
+
+/**
+ * Причина отказа про финал в ответе на отзыв — следующей попытке, вместе с нейтральными примерами.
+ * Повтор последней строки («концовка повторяет…») сюда не входит: это другой фильтр.
+ */
+export function reviewRetryNote(problem: string): string {
+  if (/концовка повторяет/iu.test(problem)) return problem;
+  if (!/финал|концовк|развязк|до\s+конца|дошл|дош[её]л|доигра|дочита/iu.test(problem)) return problem;
+  return `${problem} В ответе команды нельзя про финал, концовку, развязку и про то, что человек дошёл, доиграл или дочитал до конца. Напиши нейтрально, строчными, отдельным абзацем: «спасибо за такие слова, ради них и делаем игру» или «спасибо, что поделились впечатлениями». Цитату и ник не меняй.`;
+}
+
 export function reviewReply(raw: string, review: ReviewSource): string {
   const published = quoteToPublish(review);
   let text = raw.replace(/\r\n?/g, "\n").replace(/https?:\/\/\S+/g, "");
@@ -675,7 +716,7 @@ export function reviewReply(raw: string, review: ReviewSource): string {
     .map((line) => line.replace(/[ \t]{2,}/g, " ").trim())
     .filter((line) => line && line !== review.handle && !/^фрагмент отзыва\.?$/iu.test(line))
     .join("\n\n");
-  return text.replace(/\n{3,}/g, "\n\n").trim();
+  return neutralizeReviewFinale(text.replace(/\n{3,}/g, "\n\n").trim(), review);
 }
 
 /** Код ставит цитату сам. Ответ модели без ёлочек и без адреса. null — собирать не из чего. */

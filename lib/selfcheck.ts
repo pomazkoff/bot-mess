@@ -67,10 +67,13 @@ import {
   framePairProblem,
   frameProblem,
   mayRepublishWithoutMedia,
+  editorialFactNote,
+  editorialSteer,
   pickEditorial,
   quoteToPublish,
   reviewProblem,
   reviewReplyBudget,
+  reviewRetryNote,
 } from "./oloidEditorial.js";
 import { pickRegularShown, shownAssetFiles } from "./variety.js";
 
@@ -751,6 +754,78 @@ assert.ok(mufasaPost.includes("🔥"));
 assert.ok(reviewProblem(mufasaPost.replace("Жду", "Ждём"), mufasa));
 assert.ok(reviewProblem(assembleReviewPost("второй эпизод выйдет скоро.", mufasa, { link: OLOID_APP_STORE_URL }) ?? "", mufasa));
 assert.ok(reviewProblem(mufasaPost.replace("спасибо", "спасибо ★"), mufasa));
+assert.equal(/финал|концовк|развязк|до\s+конца/iu.test(mufasa.text), false);
+assert.ok(mufasa.text.includes("ещё три эпизода"));
+assert.ok(mufasa.text.includes("Жду с нетерпением"));
+assert.equal(reviewProblem(mufasaPost, mufasa), null, "цитата mufasa093: «ещё три эпизода» внутри ёлочек не ответ команды");
+assert.equal(rotationSafetyProblem(mufasaPost, "review"), null, "в цитате mufasa093 нет финала и концовки");
+const reviewPick = { kind: "review" as const, id: mufasa.id, topic: "Отзыв mufasa093", review: mufasa };
+const reviewSteer = editorialSteer(reviewPick);
+assert.ok(reviewSteer.includes("дошли до конца"));
+assert.ok(reviewSteer.includes("спасибо за такие слова, ради них и делаем игру"));
+assert.ok(reviewSteer.includes("спасибо, что поделились впечатлениями"));
+assert.ok(/финал/iu.test(reviewSteer) && /концовк/iu.test(reviewSteer));
+assert.ok(reviewRubric.brief.includes("дочитал до конца"));
+assert.ok(reviewRubric.brief.includes("спасибо, что поделились впечатлениями"));
+const reviewFact = editorialFactNote(reviewPick);
+assert.ok(reviewFact.includes("дочитал до конца"));
+assert.ok(reviewFact.includes("следующие эпизоды"));
+assert.ok(reviewFact.includes("Короткую благодарность"));
+const neutralThanks = ["спасибо за такие слова, ради них и делаем игру.", "спасибо, что поделились впечатлениями."];
+for (const review of OLOID_REVIEWS) {
+  const fixed = assembleReviewPost("Спасибо, что дошли до конца и написали об этом…", review, { link: review.sourceUrl });
+  assert.ok(fixed, review.id);
+  const published = quoteToPublish(review);
+  assert.ok(published, review.id);
+  assert.ok(fixed.includes(published.text), review.id);
+  assert.equal(fixed.includes("дошли до конца"), false, review.id);
+  assert.ok(neutralThanks.some((line) => fixed.includes(line)), review.id);
+  assert.equal(reviewProblem(fixed, review), null, review.id);
+  assert.equal(rotationSafetyProblem(fixed, "review"), null, review.id);
+  assert.equal(ruleCheck(fixed, oloid, evening, reviewRubric, "oloid-review", undefined, false, undefined, review.sourceUrl), null, review.id);
+  assert.ok(fixed.length <= 450, `${review.id} ${fixed.length}`);
+}
+for (const bad of [
+  "спасибо, что дошли до конца и написали об этом.",
+  "рад, что доиграли до финала.",
+  "спасибо за концовку.",
+  "здорово, что дочитали до конца.",
+  "вы прошли игру, спасибо.",
+  "спасибо, что закончили игру.",
+]) {
+  const post = assembleReviewPost(bad, mufasa, { link: OLOID_APP_STORE_URL });
+  assert.ok(post, bad);
+  assert.equal(post.includes(bad), false, bad);
+  assert.ok(post.includes(mufasa.text), bad);
+  assert.equal(reviewProblem(post, mufasa), null, bad);
+  assert.equal(rotationSafetyProblem(post, "review"), null, bad);
+}
+const keptTail = assembleReviewPost("спасибо, что дошли до конца и написали об этом.\n\nнам важно это читать.", mufasa, { link: OLOID_APP_STORE_URL });
+assert.ok(keptTail);
+assert.ok(keptTail.includes("нам важно это читать"));
+assert.equal(keptTail.includes("дошли до конца"), false);
+const sameLine = assembleReviewPost("спасибо, что дошли до конца. нам важно это читать.", mufasa, { link: OLOID_APP_STORE_URL });
+assert.ok(sameLine?.includes("нам важно это читать."));
+assert.equal(sameLine?.includes("дошли до конца"), false);
+assert.ok(keptTail.includes(mufasa.text));
+assert.equal(reviewProblem(keptTail, mufasa), null);
+assert.equal(rotationSafetyProblem(keptTail, "review"), null);
+const idiom = assembleReviewPost("в конце концов, спасибо.", mufasa, { link: OLOID_APP_STORE_URL });
+assert.ok(idiom?.includes("в конце концов, спасибо."));
+const quoteHasEnd = { ...mufasa, id: "review-end-in-quote", text: "дошли до конца, и это было здорово" };
+const preserved = assembleReviewPost("спасибо, что написали.", quoteHasEnd, { link: OLOID_APP_STORE_URL });
+assert.ok(preserved?.includes("«дошли до конца, и это было здорово»"));
+assert.ok(preserved?.includes("спасибо, что написали."));
+const strippedQuote = assembleReviewPost("дошли до конца, и это было здорово\n\nспасибо, что дошли до конца.", quoteHasEnd, { link: OLOID_APP_STORE_URL });
+assert.ok(strippedQuote?.includes("«дошли до конца, и это было здорово»"));
+assert.equal((strippedQuote?.match(/дошли до конца/gu) ?? []).length, 1, "фраза остаётся только в цитате");
+const finaleNote = reviewRetryNote("финал и концовку не упоминать");
+assert.ok(finaleNote.startsWith("финал и концовку не упоминать"));
+assert.ok(finaleNote.includes("спасибо, что поделились впечатлениями"));
+assert.ok(finaleNote.includes("дошёл"));
+assert.equal(reviewRetryNote("слишком похоже на пост от 2026-11-01"), "слишком похоже на пост от 2026-11-01");
+assert.equal(reviewRetryNote("концовка повторяет недавний пост, придумай другую"), "концовка повторяет недавний пост, придумай другую");
+assert.ok(reviewRetryNote("намёк на финал: дошли до конца").includes("Цитату и ник не меняй"));
 const pasted = assembleReviewPost("нам написали: Картинка, звук, музыка, сюжет – все. спасибо.", odosinskiy, { link: OLOID_APP_STORE_URL });
 assert.ok(pasted && reviewProblem(pasted, odosinskiy));
 assert.ok(assembleReviewPost("спасибо, что написали.", solnechny, { link: OLOID_APP_STORE_URL })?.includes("развилках \n\nбуду ждать второй эпизод"));
