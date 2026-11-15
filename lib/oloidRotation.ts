@@ -5,13 +5,18 @@ import { OLOID_DEV_NUMBER_FACTS, OLOID_DEV_NUMBERS_RUBRIC } from "./devFacts.js"
 import { tiredOloidCopyProblem } from "./oloidFacts.js";
 import { editorialRubricOpen, isOloidEditorialRubric, type EditorialGate } from "./oloidEditorial.js";
 import { OLOID_PROVOCATION_RUBRIC, type Project, type Rubric } from "./projects.js";
+import { OLOID_STEAM_RUBRIC } from "./steam.js";
 
 /**
  * Порядок — тай-брейк, когда рубрику ещё не постили. Первая в списке выходит первой.
- * Дневник, кадр и отзыв стоят в той же очереди. Источник на кулдауне или без файла
+ * Дневник, кадр, отзыв и вишлист Steam стоят в той же очереди. Источник на кулдауне или без файла
  * вынимает рубрику из пула, слот берёт следующую обычную.
+ * Steam — одна рубрика из этой очереди, не ежедневный слот и не магазин. На текущем расписании
+ * свободных слотов два-три в сутки (утро без App Store, 15:00 без VK Play, 20:00) и девять живых
+ * рубрик, поэтому вишлист выходит примерно раз в несколько дней, наравне с закулисьем и отзывом.
+ * App Store, VK Play и провокация эту рубрику не берут. Тихим пост Steam не бывает: ему нужна ссылка.
  */
-export const OLOID_ROTATION_ORDER = ["backstage", "detail", "line", "ask", "petersburg", OLOID_DEV_NUMBERS_RUBRIC, "diary", "frame", "review"] as const;
+export const OLOID_ROTATION_ORDER = ["backstage", "detail", "line", "ask", "petersburg", OLOID_DEV_NUMBERS_RUBRIC, "diary", "frame", "review", OLOID_STEAM_RUBRIC] as const;
 
 export const OLOID_LINE_RUBRIC = "line";
 export const OLOID_ASK_RUBRIC = "ask";
@@ -182,6 +187,13 @@ export function mergeLastUsed(
 export function regularPostIsQuiet(publishedRegularCount: number): boolean {
   if (!Number.isFinite(publishedRegularCount) || publishedRegularCount < 0) return false;
   return publishedRegularCount % OLOID_QUIET_EVERY === OLOID_QUIET_EVERY - 1;
+}
+
+/** Тихий слот обычной очереди. Вишлист Steam всегда со ссылкой, даже если счётчик просит тишину. */
+export function regularSlotIsQuiet(rubricId: string, publishedRegularCount: number): boolean {
+  if (rubricId === OLOID_STEAM_RUBRIC) return false;
+  if (!isOloidRotationRubric(rubricId)) return false;
+  return regularPostIsQuiet(publishedRegularCount);
 }
 
 export function countRegularPosts(history: readonly { rubric?: string }[]): number {

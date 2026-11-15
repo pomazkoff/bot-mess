@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import { OLOID_DEV_NUMBER_FACTS, OLOID_DEV_NUMBERS_RUBRIC, devNumberProblem, numberTokens } from "./devFacts.js";
-import { appStoreCodeProblem, appStoreMomentProblem, appStorePriceProblem, lowercaseSentenceStarts, provocationNumberProblem, repeatedEnding, ruleCheck } from "./generate.js";
+import { appStoreCodeProblem, appStoreMomentProblem, appStorePriceProblem, lowercaseSentenceStarts, provocationNumberProblem, repeatedEnding, ruleCheck, steamWishlistProblem } from "./generate.js";
 import {
   OLOID_DATE_HOOKS,
   OLOID_PROVOCATION_FORMATS,
@@ -17,10 +17,11 @@ import {
   provocationLexiconProblem,
   provocationWantsPoll,
   regularPostIsQuiet,
+  regularSlotIsQuiet,
   rotationSafetyProblem,
   usedDateHookIds,
 } from "./oloidRotation.js";
-import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_FROM, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RETIRED_CODES, OLOID_APP_STORE_URL, OLOID_VKPLAY_URL, PROJECTS, factsFor, nextAppStoreCode, oloidRedeemUrl, redactAppStoreCodes, spentAppStoreCodes } from "./projects.js";
+import { OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_FROM, OLOID_APP_STORE_PROMO_UNTIL, OLOID_APP_STORE_RETIRED_CODES, OLOID_APP_STORE_URL, OLOID_STEAM_LINK_FACT, OLOID_STEAM_URL, OLOID_STEAM_WISHLIST_FACT, OLOID_VKPLAY_URL, PROJECTS, factsFor, forbiddenFor, nextAppStoreCode, oloidRedeemUrl, redactAppStoreCodes, spentAppStoreCodes } from "./projects.js";
 import { appStorePromoOpen, makeDraft, pickPicture, pickRubric } from "./run.js";
 import type { HistoryItem } from "./store.js";
 import {
@@ -82,10 +83,15 @@ import {
   editorialSteer,
   pickEditorial,
   quoteToPublish,
+  REVIEW_REPLY_FALLBACK,
+  reviewHardProblem,
   reviewProblem,
   reviewReplyBudget,
   reviewRetryNote,
+  settleReviewDraft,
 } from "./oloidEditorial.js";
+import { OLOID_ONESHOT_EDITORIAL_ID, OLOID_ONESHOT_TEXT } from "./oloidOneshot.js";
+import { steamReleaseProblem } from "./steam.js";
 import { pickRegularShown, shownAssetFiles } from "./variety.js";
 
 const oloid = PROJECTS.find((project) => project.id === "oloid");
@@ -112,7 +118,7 @@ assert.ok(devNumberProblem("209 коммитов и ещё 12", sunday.text));
 const pool = eligibleRotationRubrics(oloid);
 assert.deepEqual(
   pool.map((rubric) => rubric.id),
-  ["backstage", "detail", "ask", "petersburg", OLOID_DEV_NUMBERS_RUBRIC, "diary", "frame", "review"],
+  ["backstage", "detail", "ask", "petersburg", OLOID_DEV_NUMBERS_RUBRIC, "diary", "frame", "review", "steam"],
 );
 assert.equal(pool.some((rubric) => rubric.id === "line"), false);
 assert.equal(oloid.rubrics.find((rubric) => rubric.id === "atmosphere")?.weight, 0);
@@ -137,6 +143,8 @@ for (const [count, quiet] of [
   [5, true],
 ] as const) {
   assert.equal(regularPostIsQuiet(count), quiet, String(count));
+  assert.equal(regularSlotIsQuiet("backstage", count), quiet, String(count));
+  assert.equal(regularSlotIsQuiet("steam", count), false, String(count));
 }
 
 assert.equal(oloidSlotTone(10), "morning");
@@ -417,6 +425,9 @@ assert.ok(dryIdx > 0 && publishIdx > dryIdx && dayIdx > publishIdx && markIdx > 
 assert.equal(cronSrc.slice(0, publishIdx).includes("await markAppStoreCodeUsed"), false);
 assert.match(cronSrc, /const appStoreSlot = rubricId === OLOID_APP_STORE_RUBRIC \|\| rubricId === OLOID_APP_STORE_PROMO_RUBRIC/);
 assert.ok(cronSrc.includes("pollError"));
+assert.ok(cronSrc.includes("publishOloidOneshot"));
+assert.ok(cronSrc.indexOf("await publishOloidOneshot") < cronSrc.indexOf("await makeDraft"));
+assert.equal(cronSrc.slice(0, cronSrc.indexOf("const postId = await publishPost")).includes("publishPost(channel"), false);
 
 const factBlob = oloid.facts.join("\n");
 assert.equal(/шпател/iu.test(factBlob), false);
@@ -579,6 +590,7 @@ const olderRubrics = {
   "dev-numbers": recentStamp,
   frame: recentStamp,
   review: recentStamp,
+  steam: recentStamp,
 };
 assert.equal(pickRubric(oloid, [recentTrailer], evening, undefined, [recentTrailer], day, false, day, { lastUsed: olderRubrics }).id, "diary");
 const cooledDiary: HistoryItem = {
@@ -885,6 +897,32 @@ assert.equal(mixedPost.includes("App Store"), false);
 assert.ok(reviewProblem(assembleReviewPost("если раз в неделю, нам тоже так лучше.", mixed, { link: OLOID_VKPLAY_URL }) ?? "", mixed));
 assert.ok(reviewProblem(assembleReviewPost("второй эпизод выпустим уже в скором времени.", mixed, { link: OLOID_VKPLAY_URL }) ?? "", mixed));
 assert.ok(reviewProblem(assembleReviewPost("спасибо. цена 199 ₽.", mixed, { link: OLOID_VKPLAY_URL }) ?? "", mixed));
+const inventive = "надеемся, наушники и тихий вечер вам в этом помогли";
+const inventivePost = assembleReviewPost(inventive, mufasa, { link: OLOID_APP_STORE_URL });
+assert.ok(inventivePost);
+assert.equal(reviewHardProblem(inventivePost, mufasa), null);
+const replaced = settleReviewDraft(inventive, mufasa, {
+  link: OLOID_APP_STORE_URL,
+  softExtra: "Ответ команды — не короткая благодарность",
+});
+assert.equal(replaced.replaced, true);
+assert.ok(replaced.text?.includes(REVIEW_REPLY_FALLBACK));
+assert.ok(replaced.text?.includes(mufasa.text));
+assert.equal(replaced.text?.includes("наушники"), false);
+assert.ok(replaced.text?.endsWith(OLOID_APP_STORE_URL));
+const keptReply = settleReviewDraft("спасибо, что написали.", mufasa, { link: OLOID_APP_STORE_URL });
+assert.equal(keptReply.replaced, false);
+assert.ok(keptReply.text?.includes("спасибо, что написали."));
+const softSwap = settleReviewDraft("второй эпизод выйдет скоро.", mufasa, { link: OLOID_APP_STORE_URL });
+assert.equal(softSwap.replaced, true);
+assert.ok(softSwap.text?.includes(REVIEW_REPLY_FALLBACK));
+assert.equal(softSwap.text?.includes("второй эпизод"), false);
+const brokenQuote = settleReviewDraft("спасибо.", { ...mufasa, text: "" }, { link: OLOID_APP_STORE_URL });
+assert.equal(brokenQuote.text, null);
+assert.equal(OLOID_ONESHOT_TEXT, assembleReviewPost(REVIEW_REPLY_FALLBACK, mufasa, { link: OLOID_APP_STORE_URL }));
+assert.equal(OLOID_ONESHOT_EDITORIAL_ID, mufasa.id);
+assert.ok(OLOID_ONESHOT_TEXT.includes(REVIEW_REPLY_FALLBACK));
+assert.ok(OLOID_ONESHOT_TEXT.length <= 500, String(OLOID_ONESHOT_TEXT.length));
 const egi = OLOID_REVIEWS.find((review) => review.handle === "egipetskayasila01");
 assert.ok(egi);
 assert.equal(egi.date, "2026-10-22");
@@ -912,6 +950,33 @@ assert.equal(buroProject.facts.some((fact) => fact.includes("100 ₽")), true);
 assert.equal(buroProject.facts.some((fact) => fact.includes("300")), false);
 assert.equal("forceNextRef" in buroProject, false);
 assert.equal(oloid.facts.some((fact) => fact.includes("Рейтинг 18+")), true);
+assert.equal(oloid.facts.some((fact) => fact.includes("не решён")), false);
+assert.equal(oloid.facts.some((fact) => fact.includes("страница в Steam не опубликована")), false);
+assert.ok(oloid.facts.includes(OLOID_STEAM_WISHLIST_FACT));
+const steamRubric = oloid.rubrics.find((rubric) => rubric.id === "steam");
+assert.ok(steamRubric);
+assert.deepEqual(steamRubric.topics, ["добавьте в вишлист в Steam"]);
+assert.equal(steamRubric.link?.(evening), OLOID_STEAM_URL);
+assert.equal(steamRubric.weight, 1);
+const steamFacts = factsFor(oloid, evening, "steam");
+assert.ok(steamFacts.includes(OLOID_STEAM_LINK_FACT));
+assert.equal(steamFacts.some((fact) => fact.includes("199 ₽")), false);
+for (const rubricId of ["appstore", "vkplay", "provocation"] as const) {
+  const facts = factsFor(oloid, evening, rubricId);
+  assert.equal(facts.some((fact) => fact.includes("s.team") || fact.includes("вишлист")), false, rubricId);
+  assert.equal(forbiddenFor(oloid, rubricId, evening).some((line) => line.includes("вышла в Steam")), true, rubricId);
+}
+const steamText = `олоид уже можно добавить в вишлист в Steam.\n\nэто не покупка, даты выхода нет.\n\n${OLOID_STEAM_URL}`;
+assert.equal(steamWishlistProblem(steamText, "steam"), null);
+assert.equal(steamReleaseProblem(steamText), null);
+assert.equal(ruleCheck(steamText, oloid, evening, steamRubric, "oloid-steam"), null);
+assert.ok(steamWishlistProblem(`вышла в Steam\n\n${OLOID_STEAM_URL}`, "steam"));
+assert.ok(steamWishlistProblem(`купить в Steam\n\n${OLOID_STEAM_URL}`, "steam"));
+assert.ok(steamWishlistProblem(`цена 199 ₽\n\n${OLOID_STEAM_URL}`, "steam"));
+assert.ok(steamWishlistProblem(steamText.replace(OLOID_STEAM_URL, "https://store.steampowered.com/app/1"), "steam"));
+assert.ok(steamWishlistProblem(`добавьте в вишлист Steam\n\n${OLOID_APP_STORE_URL}`, "appstore"));
+assert.equal(steamWishlistProblem(`уже в App Store\n\n${OLOID_APP_STORE_URL}`, "appstore"), null);
+assert.ok(appStorePriceProblem("цена 199 ₽", "oloid", "steam"));
 
 const studioNow = new Date("2026-11-14T13:00:00.000Z");
 const studioSlot = pickStudioSlot({ history: [], now: studioNow });
@@ -1015,6 +1080,9 @@ assert.equal(ruleCheck(studioSampleDiary, studioProject, studioNow, studioProjec
 assert.equal(studioProblem("тексты пишет нейросеть под компанию.", { subjectId: "etozhety", factText: "Тексты дела пишет нейросеть под компанию.", link: undefined }, studioNow), null);
 assert.equal(studioProblem("ИИ использовался как инструмент.", { subjectId: "oloid", factText: "Нейросети использовались как инструмент, всё дорабатывалось вручную.", link: undefined }, studioNow), null);
 assert.equal(studioProblem("хаус-плейлист затихает.", { subjectId: "tvoyak", factText: "без цифр", link: undefined }, studioNow), null);
+assert.equal(studioProblem("в Steam можно добавить в вишлист, даты нет", { subjectId: "oloid", factText: "без цифр", link: undefined }, studioNow), null);
+assert.ok(studioProblem("игра вышла в Steam", { subjectId: "oloid", factText: "без цифр", link: undefined }, studioNow));
+assert.equal(studioProblem("вышел в App Store, а в Steam только вишлист", { subjectId: "oloid", factText: "без цифр", link: undefined }, studioNow), null);
 for (const bad of [
   "это вайбкодинг",
   "навайбкожено вчера",

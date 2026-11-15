@@ -9,6 +9,7 @@ import { draftKeyboard, draftTelegramText, newDraftId } from "../lib/drafts.js";
 import { notify } from "../lib/notify.js";
 import { channelById } from "../lib/channels.js";
 import { publishDueScheduled } from "../lib/scheduled.js";
+import { publishOloidOneshot } from "../lib/oloidOneshot.js";
 
 // Публикующий эндпоинт. Вызывается только Vercel Cron (заголовок Authorization: Bearer <CRON_SECRET>).
 // ?channel=<id> — аккаунт Threads из lib/channels.ts (по умолчанию pomazkof).
@@ -110,6 +111,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (channel.paused) return res.json({ skipped: `${channel.id} paused` });
   // Аккаунт ещё не подключён — молча пропускаем, чтобы не слать ошибки в Telegram на каждом слоте
   if (!process.env[channel.tokenEnv]?.trim()) return res.json({ skipped: `нет ${channel.tokenEnv}` });
+
+  // Одноразовый отзыв mufasa093. Тема внепланового поста его не забирает. Снять — комментарий в lib/oloidOneshot.ts.
+  if (!theme && channel.id === "oloid") {
+    try {
+      const shot = await publishOloidOneshot(channel, now, dry);
+      if (shot.kind === "dry") {
+        return res.json({ dry: true, oneshot: true, channel: channel.id, rubric: "review", editorialId: shot.editorialId, text: shot.text });
+      }
+      if (shot.kind === "locked") return res.json({ skipped: "oneshot lock", channel: channel.id });
+      if (shot.kind === "failed") {
+        await notify(`❌ Threads-бот (${channel.name}, одноразовый пост): ${shot.error}`);
+        return res.status(500).json({ error: shot.error, oneshot: true });
+      }
+      if (shot.kind === "published") {
+        await notify(`✅ Опубликовано (${channel.name}, review, одноразовый отзыв ${shot.editorialId}):\n\n${shot.text}`);
+        return res.json({ posted: true, oneshot: true, channel: channel.id, rubric: "review", editorialId: shot.editorialId, postId: shot.postId, text: shot.text });
+      }
+    } catch (e: any) {
+      console.error(e);
+      await notify(`❌ Threads-бот (${channel.name}, одноразовый пост): ${e?.message ?? e}`);
+      return res.status(500).json({ error: String(e?.message ?? e), oneshot: true });
+    }
+  }
 
   try {
     const history = await getHistory();

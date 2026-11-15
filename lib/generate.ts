@@ -2,7 +2,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { OLOID_DEV_NUMBERS_RUBRIC, devNumberProblem, numberTokens } from "./devFacts.js";
 import { oloidColorSteer, oloidPromptFacts, recentDetailNote, spatulaProblem, tiredOloidCopyProblem, type OloidPromptFacts } from "./oloidFacts.js";
 import { isOloidRotationRubric, provocationProblem, quietProblem, rotationSafetyProblem } from "./oloidRotation.js";
-import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, factsFor, forbiddenFor, mentionsPrice, mskCalendarDay, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_VKPLAY_FROM, OLOID_VKPLAY_RUBRIC, oloidRedeemUrl, promoActive, redactAppStoreCodes, type DetectiveRef, type Project, type Rubric } from "./projects.js";
+import { BURO_DETECTIVE_LOOKBACK, BURO_DETECTIVE_REFS, factsFor, forbiddenFor, mentionsPrice, mskCalendarDay, OLOID_APP_STORE_CODES, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_APP_STORE_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_STEAM_URL, OLOID_VKPLAY_FROM, OLOID_VKPLAY_RUBRIC, oloidRedeemUrl, promoActive, redactAppStoreCodes, type DetectiveRef, type Project, type Rubric } from "./projects.js";
+import { OLOID_STEAM_RUBRIC, foreignSteamLinkProblem, steamReleaseProblem } from "./steam.js";
 import { studioProperWord } from "./studio.js";
 import type { HistoryItem } from "./store.js";
 
@@ -559,6 +560,8 @@ export function ruleCheck(
   if (rubric) {
     const safety = rotationSafetyProblem(text, rubric.id);
     if (safety) return safety;
+    const steam = steamWishlistProblem(text, rubric.id);
+    if (steam) return steam;
   }
   if (devFact) {
     const numbers = devNumberProblem(text, devFact);
@@ -584,7 +587,7 @@ export function ruleCheck(
 }
 
 const APP_STORE_RUBRICS = new Set<string>([OLOID_APP_STORE_RUBRIC, OLOID_APP_STORE_PROMO_RUBRIC]);
-const NO_PRICE_RUBRICS = new Set<string>([OLOID_APP_STORE_RUBRIC, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_VKPLAY_RUBRIC, OLOID_PROVOCATION_RUBRIC]);
+const NO_PRICE_RUBRICS = new Set<string>([OLOID_APP_STORE_RUBRIC, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_VKPLAY_RUBRIC, OLOID_PROVOCATION_RUBRIC, OLOID_STEAM_RUBRIC]);
 // Эксклюзив App Store: такие формулировки пост отклоняют. «Уже в App Store» и «на iPhone и iPad» без «только» — можно.
 // «только раз», «только один раз», «только одному», «только первому» — про одноразовый код, не эксклюзив.
 const APP_STORE_EXCLUSIVITY =
@@ -649,6 +652,29 @@ const VK_PLAY_FIRE = /пожар|(?<![\p{L}])огон(?:ь|я|ю|ем|и)(?![\p{
 const VK_PLAY_FINALE = /финал|концовк|развязк/iu;
 const VK_PLAY_AI = /нейросет|искусственн\p{L}*\s+интеллект|(?<![\p{L}])ии(?![\p{L}])|(?<![\p{L}])ai(?![\p{L}])/iu;
 const VK_PLAY_AI_ALLOWED = /ии использовался как инструмент/iu;
+
+const STEAM_STORE_SILENT = new Set<string>([OLOID_APP_STORE_RUBRIC, OLOID_APP_STORE_PROMO_RUBRIC, OLOID_VKPLAY_RUBRIC, OLOID_PROVOCATION_RUBRIC]);
+
+/**
+ * Вишлист Steam: ровно ссылка OLOID_STEAM_URL, призыв в вишлист, без релиза, даты и цены.
+ * Магазины и провокация Steam не упоминают. Остальные рубрики не ставят ссылку и не объявляют выход.
+ */
+export function steamWishlistProblem(text: string, rubricId: string): string | null {
+  if (STEAM_STORE_SILENT.has(rubricId)) {
+    if (/steam|s\.team/iu.test(text)) return "в этом посте Steam не упоминай";
+    return null;
+  }
+  const leaked = foreignSteamLinkProblem(text, rubricId);
+  if (leaked) return leaked;
+  const release = steamReleaseProblem(text);
+  if (rubricId !== OLOID_STEAM_RUBRIC) return release;
+  if (!/вишлист|wishlist|желаем/iu.test(text)) return "позови добавить в вишлист";
+  if (!/steam/iu.test(text)) return "назови Steam";
+  if (release) return release;
+  if (mentionsPrice(text)) return "цену в посте Steam не называть";
+  if (!text.includes(OLOID_STEAM_URL)) return `ссылка должна быть ровно ${OLOID_STEAM_URL}`;
+  return null;
+}
 
 /** Пост VK Play: VK Play назван, без хоррора, пожара, финала и цены. Жанр называть не обязательно. */
 export function vkPlayProblem(text: string, projectId: string, rubricId: string): string | null {
@@ -817,10 +843,13 @@ function provocationFactNote(rubricId?: string, quiet?: boolean): string {
 
 function vkPlayFactNote(rubricId?: string): string {
   if (rubricId !== OLOID_VKPLAY_RUBRIC) return "";
-  return "Это пост рубрики VK Play. Факт, не отклоняй: «Олоид» есть на VK Play (вышел там). Не требуй новость о выходе и не требуй называть жанр. Ссылку в конце не отклоняй: это страница игры на VK Play, UTM нет специально. «Олоид» — мистическая визуальная новелла, не хоррор: «хоррор», horror и «ужастик» отклоняй. Пожар, огонь, финал, концовки, скелет, убийц и кадр «олоид на ладони» отклоняй. Яркий момент из фактов и кадра можно. Цену не упоминать. Если в посте есть цена — отклоняй. Про ИИ допустима только фраза «ИИ использовался как инструмент»; другие формулировки про нейросети отклоняй. Промокоды отклоняй.\n";
+  return "Это пост рубрики VK Play. Факт, не отклоняй: «Олоид» есть на VK Play (вышел там). Не требуй новость о выходе и не требуй называть жанр. Ссылку в конце не отклоняй: это страница игры на VK Play, UTM нет специально. «Олоид» — мистическая визуальная новелла, не хоррор: «хоррор», horror и «ужастик» отклоняй. Пожар, огонь, финал, концовки, скелет, убийц и кадр «олоид на ладони» отклоняй. Яркий момент из фактов и кадра можно. Цену не упоминать. Если в посте есть цена — отклоняй. Про ИИ допустима только фраза «ИИ использовался как инструмент»; другие формулировки про нейросети отклоняй. Промокоды отклоняй. Steam, вишлист и ссылку s.team в этом посте отклоняй.\n";
 }
 
 function rotationFactNote(rubricId?: string, devFact?: string, quiet?: boolean): string {
+  if (rubricId === "review") {
+    return "Это пост-отзыв. Цитату игрока не отклоняй. Ответ команды не отклоняй за тон, длину благодарности и бытовую фразу, которой нет в фактах. Отклоняй только спойлер и финал в ответе команды.\n";
+  }
   if (!rubricId || !isOloidRotationRubric(rubricId)) return "";
   let note =
     "Это обычный пост, не магазин. Хоррор, horror, ужастик, пожар, огонь, финал, концовку, скелет, достижения, выборы игрока, тайную комнату и природу артефакта — отклоняй. Про ИИ допустима только фраза «ИИ использовался как инструмент».\n";
@@ -837,20 +866,26 @@ function oloidCheckNote(rubricId?: string, now = new Date()): string {
   if (rubricId === OLOID_DEV_NUMBERS_RUBRIC) {
     return `${style}Это пост «цифры разработки». Цену не упоминать. Числа, которых нет в отдельном выбранном факте, отклоняй — в том числе 199 ₽, 2–3 часа, около 1600 реплик и 45 статей, даже если они есть в общих фактах.\n`;
   }
+  if (rubricId === OLOID_STEAM_RUBRIC) {
+    return `${style}Вишлист Steam — факт этого поста. Ссылку ${OLOID_STEAM_URL} не отклоняй: UTM нет специально. Не отклоняй призыв добавить игру в вишлист. Отклоняй утверждение, что игра уже вышла в Steam, что её можно купить, и любую дату выхода. Цену не упоминать. Если в посте есть цена — отклоняй.\n`;
+  }
   if (rubricId === OLOID_VKPLAY_RUBRIC) {
-    return `${style}«Вышло на VK Play» — факт этого поста, не отклоняй. Выход на Android или Steam — нет. Цену не упоминать. Если в посте есть цена — отклоняй.\n`;
+    return `${style}«Вышло на VK Play» — факт этого поста, не отклоняй. Выход на Android — нет. Выход и покупка в Steam — нет: там только вишлист, и в этом посте его не упоминай. Цену не упоминать. Если в посте есть цена — отклоняй.\n`;
   }
   if (rubricId === OLOID_PROVOCATION_RUBRIC) {
-    return `${style}Цену не упоминать. Если в посте есть цена — отклоняй. Это не пост магазина: не требуй новость об App Store или VK Play и не требуй ссылку, если её нет.\n`;
+    return `${style}Цену не упоминать. Если в посте есть цена — отклоняй. Это не пост магазина: не требуй новость об App Store или VK Play и не требуй ссылку, если её нет. Steam не упоминай.\n`;
   }
   if (rubricId === OLOID_APP_STORE_RUBRIC || rubricId === OLOID_APP_STORE_PROMO_RUBRIC) {
-    return `${style}«Вышло на iOS / iPhone / iPad» и «App Store» допустимы, когда они есть в фактах. «Эксклюзив», «только в App Store», «только на iOS», «iOS-only» и «на других платформах релиза не было» — отклоняй. Про VK Play в этом посте не пиши. Выход на Android или Steam — нет. Цену не упоминать. Если в посте есть цена — отклоняй.\n`;
+    return `${style}«Вышло на iOS / iPhone / iPad» и «App Store» допустимы, когда они есть в фактах. «Эксклюзив», «только в App Store», «только на iOS», «iOS-only» и «на других платформах релиза не было» — отклоняй. Про VK Play и Steam в этом посте не пиши. Выход на Android — нет. Цену не упоминать. Если в посте есть цена — отклоняй.\n`;
+  }
+  if (rubricId === "review") {
+    return `${style}Цитата игрока — не утверждение команды. Ответ команды не отклоняй, если в нём нет финала и спойлера. Выход на Android — нет. Покупку и дату выхода в Steam — нет.\n`;
   }
   const vkLine =
     mskCalendarDay(now) >= OLOID_VKPLAY_FROM
       ? "«Вышло на VK Play» допустимо: это факт. "
       : "Выход на VK Play — нет. ";
-  return `${style}«Вышло на iOS / iPhone / iPad», «App Store» и цена 199 ₽ допустимы, когда они есть в фактах. ${vkLine}Выход на Android или Steam — нет.\n`;
+  return `${style}«Вышло на iOS / iPhone / iPad», «App Store» и цена 199 ₽ допустимы, когда они есть в фактах. ${vkLine}Выход на Android — нет. В Steam есть только вишлист, не релиз и не покупка: ссылку s.team ставь только если это пост рубрики steam.\n`;
 }
 
 export async function factCheck(

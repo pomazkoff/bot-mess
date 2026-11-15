@@ -18,7 +18,7 @@ import {
   provocationHasLink,
   provocationLexiconProblem,
   provocationWantsPoll,
-  regularPostIsQuiet,
+  regularSlotIsQuiet,
   toneNoteForRubric,
   toPollAttachment,
   usedDateHookIds,
@@ -45,9 +45,13 @@ import {
   editorialProblem,
   isOloidEditorialRubric,
   pickEditorial,
+  reviewHardProblem,
+  reviewLinkProblem,
   reviewReplyBudget,
   reviewRetryNote,
   reviewSimilarityText,
+  reviewSoftProblem,
+  settleReviewDraft,
   type EditorialGate,
 } from "./oloidEditorial.js";
 
@@ -559,7 +563,7 @@ export async function makeDraft(opts: {
     linkContent = `provocation-${provocationFormat.id}`;
   }
   const withProvocationLink = provocation && provocationHasLink(provocationCount);
-  const quiet = !extraTheme && ((rotation && regularPostIsQuiet(regularCount)) || (provocation && !withProvocationLink));
+  const quiet = !extraTheme && (regularSlotIsQuiet(rubric.id, regularCount) || (provocation && !withProvocationLink));
   const tone = project.id === "oloid" ? oloidSlotTone(mskHour(now)) : undefined;
   const dateHook = rotation && !extraTheme ? dateHookDue : null;
 
@@ -740,14 +744,47 @@ export async function makeDraft(opts: {
     // Отзыв: цитату, ник и ссылку ставит код. Модель пишет только ответ команды.
     let candidate = isPromo ? stripPromptMeta(drafted.text) : drafted.text;
     const reviewLink = editorial?.kind === "review" && !quiet ? editorial.review.sourceUrl : undefined;
+    // Отзыв: цитата и атрибуция жёсткие. Ответ команды пост не бракует — мягкий провал заменяется нейтральной фразой.
     if (editorial?.kind === "review") {
-      const assembled = assembleReviewPost(candidate, editorial.review, { link: reviewLink });
-      if (!assembled) {
-        feedback = "не собрался ответ на отзыв";
-        rejected.push(`#${i + 1} ❌ ${feedback}\n${candidate}`);
+      const preview = assembleReviewPost(candidate, editorial.review, { link: reviewLink });
+      let softExtra: string | null = null;
+      if (
+        preview &&
+        !reviewHardProblem(preview, editorial.review) &&
+        !reviewLinkProblem(preview, reviewLink) &&
+        !reviewSoftProblem(preview, editorial.review)
+      ) {
+        const simBare = reviewSimilarityText(preview, editorial.review);
+        const replyOnly = preview.replace(/«[^»]*»/gu, " ");
+        softExtra =
+          spatulaProblem(replyOnly) ??
+          tiredOloidCopyProblem(replyOnly) ??
+          repeatedEnding(simBare, history, project.id) ??
+          tooSimilar(simBare, history, false) ??
+          oloidRepeatProblem(simBare, history, now, []);
+        if (!softExtra) {
+          softExtra = await factCheck(preview, project, pictureNote, now, {
+            rubricId: rubric.id,
+            promoCode,
+            devFact: devFact?.text,
+            quiet,
+            extraLink: reviewLink,
+            editorialFacts: editorialFacts(editorial),
+            editorialNote: editorialFactNote(editorial),
+            copyNote: oloidCopyFactNote(copyHook, copyClosing),
+          });
+        }
+      }
+      const settled = settleReviewDraft(candidate, editorial.review, { link: reviewLink, softExtra });
+      if (settled.text === null) {
+        feedback = reviewRetryNote(settled.problem);
+        rejected.push(`#${i + 1} ❌ ${feedback}\n${preview ?? candidate}`);
         continue;
       }
-      candidate = assembled;
+      if (settled.replaced) {
+        rejected.push(`#${i + 1} ответ команды заменён на нейтральный${softExtra ? `: ${softExtra}` : ""}`);
+      }
+      return { ...base, text: settled.text, rejected };
     }
     const withOptions = [candidate, ...(drafted.options ?? [])].join("\n");
     const check = () => factCheck(candidate, project, editorial ? pictureNote : shown?.note ?? pictureNote, now, {
@@ -764,13 +801,9 @@ export async function makeDraft(opts: {
     });
     // Заданный код в антиповтор не входит (ни в посте, ни в истории): совпадение по коду — не повтор.
     // У отзыва и дневника из сравнения вынимается дословная вставка: повторяется ответ, не источник.
-    const simBare = editorial?.kind === "review"
-      ? reviewSimilarityText(candidate, editorial.review)
-      : editorial?.kind === "diary"
-        ? diarySimilarityText(candidate, editorial.entry)
-        : candidate;
+    const simBare = editorial?.kind === "diary" ? diarySimilarityText(candidate, editorial.entry) : candidate;
     const simText = extraCode ? stripExtraCode(simBare, extraCode) : simBare;
-    const simWithOptions = extraCode ? stripExtraCode(withOptions, extraCode) : editorial?.kind === "review" ? simBare : withOptions;
+    const simWithOptions = extraCode ? stripExtraCode(withOptions, extraCode) : withOptions;
     const simHistory = extraCode ? history.map((h) => ({ ...h, text: stripExtraCode(h.text, extraCode) })) : history;
     const hard =
       (editorial ? editorialProblem(candidate, editorial, media) : null) ??
@@ -804,7 +837,7 @@ export async function makeDraft(opts: {
       }
     }
     if (problem) {
-      feedback = editorial?.kind === "review" ? reviewRetryNote(problem) : problem;
+      feedback = problem;
       hints.promoRejected.push(candidate);
       hints.vkRejected.push(candidate);
       rejected.push(`#${i + 1}${isPromo && promoAngle ? ` [${promoAngle.label}]` : vkAngle ? ` [${vkAngle.label}]` : ""} ❌ ${problem}\n${candidate}`);
