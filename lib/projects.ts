@@ -5,6 +5,7 @@
 // Цифры и процесс разработки «Олоида» — отдельный список в lib/devFacts.ts, не в общих facts.
 
 import { OLOID_DEV_NUMBERS_RUBRIC } from "./devFacts.js";
+import { OLOID_STEAM_RUBRIC, OLOID_STEAM_URL } from "./steam.js";
 import { STUDIO_PROJECT } from "./studio.js";
 
 // Видео прикрепляется к посту по публичной ссылке: Meta скачивает его сама (MP4/MOV, H.264, до 5 минут, до 1 ГБ)
@@ -85,6 +86,8 @@ export const OLOID_APP_STORE_PROMO_RUBRIC = "appstore-promo";
 // Страница «Олоида» на VK Play. Других копий адреса нет.
 // Если в константу снова попадёт TODO, крон пост этой рубрики не публикует.
 export const OLOID_VKPLAY_URL = "https://vkplay.ru/play/game/oloid-50004";
+// Вишлист Steam. Релиза и покупки там нет. Других копий адреса нет: рубрика steam ставит его без UTM.
+export { OLOID_STEAM_URL, OLOID_STEAM_RUBRIC };
 /** Сайт «Олоида» без UTM. Обычные посты ставят его с UTM через project.link. */
 export const OLOID_SITE_URL = "https://oloid-game.ru/";
 export const OLOID_VKPLAY_RUBRIC = "vkplay";
@@ -118,11 +121,18 @@ export function vkPlayUrlBlocked(url = OLOID_VKPLAY_URL): boolean {
 // Площадки в запретах. В массиве проекта лежит формулировка «VK Play ещё не вышел»;
 // forbiddenFor подменяет её по дате и рубрике. Цена в тексте этой строки снимается отдельно для постов без цены.
 const OLOID_PLATFORM_FORBIDDEN =
-  "Не писать, что игра уже вышла на VK Play, Android или Steam. Дат этих площадок нет — не называй их. Цену называть только 199 ₽ (App Store, iOS); другие цены не выдумывать. Языки локализации не называть: их нет в фактах.";
+  "Не писать, что игра уже вышла на VK Play, Android или Steam. Дат этих площадок нет — не называй их. В Steam есть только вишлист, не релиз и не покупка: ссылку на него ставить только в рубрике steam. Цену называть только 199 ₽ (App Store, iOS); другие цены не выдумывать. Языки локализации не называть: их нет в фактах.";
 const OLOID_PLATFORM_FORBIDDEN_VK_OUT =
-  "Не писать, что игра уже вышла на Android или Steam. Дат этих площадок нет — не называй их. «Олоид» на VK Play уже вышел — это можно. Цену называть только 199 ₽ (App Store, iOS); другие цены не выдумывать. Языки локализации не называть: их нет в фактах.";
+  "Не писать, что игра уже вышла на Android или Steam. Дат этих площадок нет — не называй их. В Steam можно только вишлист, без ссылки в этом посте. «Олоид» на VK Play уже вышел — это можно. Цену называть только 199 ₽ (App Store, iOS); другие цены не выдумывать. Языки локализации не называть: их нет в фактах.";
 const OLOID_APP_STORE_PLATFORM_FORBIDDEN =
-  "Не пиши про VK Play. Не пиши, что игра уже вышла на Android или Steam, и не называй даты этих площадок. Не пиши «эксклюзив», «только в App Store», «только на iOS», «только на iPhone», «только для iPad», «iOS-only» и что на других платформах релиза не было. Цену не упоминать. Языки локализации не называть: их нет в фактах.";
+  "Не пиши про VK Play и Steam: ни вишлист, ни ссылку. Не пиши, что игра уже вышла на Android или Steam, и не называй даты этих площадок. Не пиши «эксклюзив», «только в App Store», «только на iOS», «только на iPhone», «только для iPad», «iOS-only» и что на других платформах релиза не было. Цену не упоминать. Языки локализации не называть: их нет в фактах.";
+const OLOID_STEAM_PLATFORM_FORBIDDEN =
+  "Это пост вишлиста Steam. Не пиши, что игра уже вышла в Steam, что её можно купить или скачать в Steam, и не называй дату выхода. Android в разработке — не пиши, что игра там вышла. App Store и VK Play в этом посте не упоминай. Цену не упоминать. Языки локализации не называть: их нет в фактах.";
+export const OLOID_STEAM_WISHLIST_FACT =
+  "В Steam «Олоид» можно добавить в вишлист. Это не релиз и не покупка: даты выхода в Steam нет, купить игру там пока нельзя.";
+export const OLOID_STEAM_LINK_FACT = `Страница вишлиста Steam, единственная ссылка такого поста: ${OLOID_STEAM_URL}. Без UTM.`;
+const OLOID_STEAM_INVITE_FORBIDDEN =
+  "Ссылку на вишлист Steam и призыв добавить игру в желаемое пиши только в рубрике steam. В остальных постах ссылку Steam не ставь. Не пиши, что игра уже вышла в Steam, что её можно купить в Steam, и не называй дату выхода в Steam.";
 
 // Окно автоматической раздачи по Москве, оба дня включительно.
 // До OLOID_APP_STORE_PROMO_FROM и после OLOID_APP_STORE_PROMO_UNTIL утренний слот — обычный appstore
@@ -389,7 +399,7 @@ export const PROJECTS: Project[] = [
   {
     id: "oloid",
     name: "Олоид",
-    // Страница Steam пока не публичная — ведём на лендинг игры
+    // Обычные посты ведут на лендинг. Вишлист Steam — отдельная рубрика со своей ссылкой, без UTM.
     link: (d, c) => utm(OLOID_SITE_URL, d, c),
     requireLink: true,
     topicTags: ["Визуальные новеллы", "Инди-игры", "Петербург", "Детективы"],
@@ -482,7 +492,8 @@ export const PROJECTS: Project[] = [
       "«Олоид» вышел на iOS в октябре 2026 года и доступен в App Store на iPhone и iPad.",
       "Цена в App Store — 199 ₽.",
       OLOID_VKPLAY_SOON_FACT,
-      "Android в разработке. Steam не решён, страница в Steam не опубликована.",
+      "Android в разработке.",
+      OLOID_STEAM_WISHLIST_FACT,
       "Визуальный ориентир — Disco Elysium.",
       "У игры есть сайт oloid-game.ru.",
       "Вышел трейлер «Олоида», его можно посмотреть на сайте oloid-game.ru.",
@@ -593,7 +604,7 @@ export const PROJECTS: Project[] = [
       "«Нарисовано маслом», «живопись маслом» — только «в стиле масляной живописи».",
       "Выдуманный прогресс разработки и выдуманные эпизоды («готово 80%», «вчера записали озвучку» и т. п.). Рассказывать можно только эпизоды из фактов. Внутренние провалы (откаты, поломки сохранений) — не упоминать.",
       "Выдуманные исторические факты о реальных событиях 1898/1946/1993 годов.",
-      "Призывы добавить игру в желаемое в Steam и ссылки на Steam — страницы пока нет.",
+      OLOID_STEAM_INVITE_FORBIDDEN,
       "Тарковский, Звягинцев и любые другие режиссёры, авторы и игры, которых нет в фактах, — не упоминать и не сравнивать с ними.",
       "Что показано или слышно в трейлере и сколько он длится — не описывать и не намекать («послушайте этот стук»).",
       "Выдуманные личные истории и события: посты идут от реальных людей и аккаунтов. От первого лица — только мнения и вопросы («мне кажется…», «а у вас?»); события — только те, что есть в фактах о разработке («мы переделывали…»).",
@@ -809,7 +820,25 @@ export const PROJECTS: Project[] = [
         weight: 1,
         link: () => OLOID_APP_STORE_URL,
         brief:
-          "Отзыв игрока и короткий ответ команды. Цитату, ник, дату и ссылку подставит код: не пиши их сам и не ставь ёлочки. Ответ — одна-две фразы, благодарность или вопрос, строчными, отдельным абзацем. Без даты выхода, без обещаний, без новых фактов, без звёзд и без сводки, что игра всем нравится. Нельзя финал, концовку, развязку и слова, что человек дошёл, доиграл или дочитал до конца. Нейтрально: «спасибо за такие слова, ради них и делаем игру» или «спасибо, что поделились впечатлениями». Площадку отзыва не подменяй: App Store и VK Play не смешивать, цену в ответ на отзыв VK Play не ставить.",
+          "Отзыв игрока и короткий ответ команды. Цитату, ник, дату и ссылку подставит код: не пиши их сам и не ставь ёлочки. Ответ — одна-две фразы, благодарность или вопрос, строчными, отдельным абзацем. Без даты выхода, без обещаний, без новых фактов, без звёзд и без сводки, что игра всем нравится. Нельзя финал, концовку, развязку и слова, что человек дошёл, доиграл или дочитал до конца. Нейтрально: «спасибо за такие слова, ради них и делаем игру» или «спасибо, что поделились впечатлениями». Тёплый ответ без финала пост не бракует. Площадку отзыва не подменяй: App Store и VK Play не смешивать, цену в ответ на отзыв VK Play не ставить.",
+      },
+      // Обычная очередь LRU, не магазин. Свободный слот (утро без App Store, день без VK Play, 20:00).
+      // Примерно раз в несколько дней, наравне с другими живыми рубриками. Тихим не бывает: ссылка обязательна.
+      // Остановить: убрать id из OLOID_ROTATION_ORDER.
+      {
+        id: OLOID_STEAM_RUBRIC,
+        weight: 1,
+        withPicture: true,
+        topicTag: "Инди-игры",
+        link: () => OLOID_STEAM_URL,
+        brief: [
+          "Пост про вишлист Steam. Игра там не вышла и не продаётся: даты выхода нет, купить нельзя.",
+          "Позови добавить «Олоид» в вишлист. Тема поста — «добавьте в вишлист в Steam».",
+          "Не пиши «вышла», «уже в Steam», «можно купить», «релиз» и любую дату. Цену не называй.",
+          "App Store, VK Play и Android в этом посте не упоминай.",
+          "Ссылку в конце вставь символ в символ, без UTM. Других адресов нет.",
+        ].join(" "),
+        topics: ["добавьте в вишлист в Steam"],
       },
       // Раз в календарные сутки МСК (dailyRubric): не в общей очереди, weight 0.
       // Картинка — один баннер из appStorePictures (не кадр из pictures). Трейлер слот не съедает и остаётся видео.
@@ -875,7 +904,7 @@ export const PROJECTS: Project[] = [
           "Один яркий момент без спойлеров, только из фактов этого поста и описания приложенного кадра. Длительность упоминай только если факт про 2–3 часа есть в конкретике этого поста. Без пожара и без финала.",
           "Нельзя: повороты сюжета, кто убийца, концовки, скелет, что нашли за обоями, кадр «олоид на ладони», имена, которых нет в фактах.",
           "Про нейросети и ИИ — только если уместно, и только фразой «ИИ использовался как инструмент». Других формулировок про ИИ нет.",
-          "Промокоды и бесплатную раздачу не упоминай. Цену не упоминать.",
+          "Промокоды и бесплатную раздачу не упоминай. Цену не упоминать. Про Steam и Android в этом посте не пиши.",
           "VK Play назови в тексте один раз. Ссылку в конце вставь символ в символ, без UTM. Последняя строка перед ссылкой — короткое приглашение или вопрос новыми словами; не повторяй концовки недавних постов.",
         ].join(" "),
         // Тем нет: угол и приём начала выбирает pickVkPlayAngle (lib/generate.ts), на каждой попытке свой.
@@ -948,9 +977,18 @@ const appStoreRubric = (rubricId?: string) =>
   rubricId === OLOID_APP_STORE_RUBRIC || rubricId === OLOID_APP_STORE_PROMO_RUBRIC;
 
 const noPriceRubric = (rubricId?: string) =>
-  appStoreRubric(rubricId) || rubricId === OLOID_VKPLAY_RUBRIC || rubricId === OLOID_PROVOCATION_RUBRIC;
+  appStoreRubric(rubricId) || rubricId === OLOID_VKPLAY_RUBRIC || rubricId === OLOID_PROVOCATION_RUBRIC || rubricId === OLOID_STEAM_RUBRIC;
+
+const STEAM_SILENT_RUBRICS = new Set<string>([
+  OLOID_APP_STORE_RUBRIC,
+  OLOID_APP_STORE_PROMO_RUBRIC,
+  OLOID_VKPLAY_RUBRIC,
+  OLOID_PROVOCATION_RUBRIC,
+  OLOID_DEV_NUMBERS_RUBRIC,
+]);
 
 function platformForbidden(rubricId: string | undefined, now: Date): string {
+  if (rubricId === OLOID_STEAM_RUBRIC) return OLOID_STEAM_PLATFORM_FORBIDDEN;
   if (appStoreRubric(rubricId)) return OLOID_APP_STORE_PLATFORM_FORBIDDEN;
   // Рубрика VK Play объявляет выход даже в превью до даты слота. Остальные рубрики — только с OLOID_VKPLAY_FROM.
   if (rubricId === OLOID_VKPLAY_RUBRIC || mskCalendarDay(now) >= OLOID_VKPLAY_FROM) return OLOID_PLATFORM_FORBIDDEN_VK_OUT;
@@ -972,6 +1010,10 @@ export function factsFor(p: Project, now = new Date(), rubricId?: string): strin
       if (appStoreRubric(rubricId)) return [];
       return [vkFact];
     });
+    if (rubricId && STEAM_SILENT_RUBRICS.has(rubricId)) {
+      facts = facts.filter((f) => f !== OLOID_STEAM_WISHLIST_FACT && !f.includes(OLOID_STEAM_URL));
+    }
+    if (rubricId === OLOID_STEAM_RUBRIC && !facts.includes(OLOID_STEAM_LINK_FACT)) facts = [...facts, OLOID_STEAM_LINK_FACT];
   }
   // Рубрика цифр не видит цену: в пост можно только числа выбранного факта из devFacts.
   if (!noPriceRubric(rubricId) && rubricId !== OLOID_DEV_NUMBERS_RUBRIC) return facts;
@@ -981,6 +1023,9 @@ export function factsFor(p: Project, now = new Date(), rubricId?: string): strin
 /** Запреты для промпта. В рубриках без цены разрешение назвать 199 ₽ заменяется на «Цену не упоминать». */
 export function forbiddenFor(p: Project, rubricId?: string, now = new Date()): string[] {
   let list = p.id === "oloid" ? p.forbidden.map((f) => (f === OLOID_PLATFORM_FORBIDDEN ? platformForbidden(rubricId, now) : f)) : p.forbidden;
+  if (p.id === "oloid" && rubricId === OLOID_STEAM_RUBRIC) {
+    list = list.filter((f) => f !== OLOID_STEAM_INVITE_FORBIDDEN);
+  }
   if (p.id === "oloid" && rubricId === OLOID_DEV_NUMBERS_RUBRIC) {
     list = list.map((f) =>
       f

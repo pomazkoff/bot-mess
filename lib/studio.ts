@@ -4,6 +4,7 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { steamReleaseProblem } from "./steam.js";
 import type { HistoryItem } from "./store.js";
 import type { Media, Project, Rubric } from "./projects.js";
 
@@ -88,7 +89,7 @@ const SUBJECTS: readonly StudioSubject[] = [
       { id: "oloid-paint", label: "масляная живопись", rubrics: ["how", "diary"], image: "oloid-kitchen", text: "Визуал «Олоида» — в стиле масляной живописи, приглушённая тёплая охра. Нейросети использовались как инструмент, всё дорабатывалось вручную." },
       { id: "oloid-sprites", label: "спрайты под мазок", rubrics: ["diary"], image: "oloid-corridor", text: "Спрайты «Олоида» переписывали под мазок: окно диалога было стеклом и стало мазком." },
       { id: "oloid-what", label: "что это", rubrics: ["news", "ask", "thoughts"], image: "oloid-dvor-2018", text: "«Олоид» — мистическая визуальная новелла, не хоррор. Действие в Петербурге в 2018 году. Главный герой — документалист Егор. Эпизод I называется «Что было, то и будет»." },
-      { id: "oloid-stores", label: "где вышел", rubrics: ["news"], image: "oloid-street", text: "«Олоид» вышел в App Store на iPhone и iPad и на VK Play. Android в разработке, Steam не решён: не пиши, что игра там вышла, и не ставь дату." },
+      { id: "oloid-stores", label: "где вышел", rubrics: ["news"], image: "oloid-street", text: "«Олоид» вышел в App Store на iPhone и iPad и на VK Play. Android в разработке. В Steam игру можно добавить в вишлист: это не релиз, даты выхода нет, купить там пока нельзя. Ссылку на Steam в этом посте не ставь." },
       { id: "oloid-price", label: "цена эпизода", rubrics: ["news"], image: "oloid-bar", text: "Цена «Олоида» — 199 ₽ за эпизод. Рейтинг 16+. Эпизод I проходит примерно за 2–3 часа." },
       { id: "oloid-guitar", label: "гитара", rubrics: ["how", "thoughts"], image: "oloid-corridor", text: "Саундтрек «Олоида» — только сольная акустическая гитара. Имя композитора не называть. Играть лучше в наушниках." },
       { id: "oloid-ask", label: "вопрос про двор", rubrics: ["ask"], image: "oloid-yard", text: "Можно спросить, узнаёт ли человек свой старый двор. Новых фактов сверх этой фразы нет." },
@@ -246,7 +247,7 @@ export const STUDIO_PROJECT: Project = {
     "Вайбкодинг, «вайб», «навайбкожено», ИИ-агенты, которые пишут код, названия инструментов и моделей, pull request и слово «лей».",
     "Инфраструктура, хостинг, IP, адреса vercel, ключи, репозитории, админки, реквизиты, ИНН, платёжные кабинеты и любые промокоды.",
     "Спойлеры «Олоида»: природа артефакта, ритуал, разгадки убийств, скелет, тайная комната. «Олоид» не называть хоррором.",
-    "Не писать, что «Олоид» вышел в Steam или Android, и не ставить этим площадкам дату.",
+    "Не писать, что «Олоид» вышел в Steam или Android, и не ставить этим площадкам дату. Вишлист Steam можно назвать: это не релиз и не покупка. Ссылку на Steam в посте студии не ставь.",
     "«Тишина»: тайна «той ночи», содержание писем, следующие главы, их цены и даты, Android и iPad. Событие «Первые письма» — только пока оно ещё идёт.",
     "«Коммуналка»: концовки, пасхалка с дальней дверью, тёмная комната, хостинг и IP.",
     "Sic Mundus: любые ссылки, скриншоты, цены, монетизация и сроки релиза. Неутверждённые идеи не писать: общий туман, легенды, тема дня, слои времени.",
@@ -457,9 +458,8 @@ export function studioProblem(text: string, slot: Pick<StudioSlot, "subjectId" |
   if (slot.subjectId === "sic-mundus" && /выйдет|дата\s+выхода|монетиз|₽|(?<![\p{L}])цен(?:а|у|ы|е)(?![\p{L}])/iu.test(text)) {
     return "у Sic Mundus нет цены и срока релиза";
   }
-  if (/steam/iu.test(text) && /выш|уже\s+в|релиз/iu.test(text) && !/не\s+реш[её]н|не\s+опублик/iu.test(text)) {
-    return "не пиши, что игра вышла в Steam";
-  }
+  const steamRelease = steamReleaseProblem(text);
+  if (steamRelease) return steamRelease;
   const allowed = new Set(numberTokens(slot.factText));
   const withoutUrls = text.replace(/https?:\/\/\S+/g, " ");
   const extra = numberTokens(withoutUrls).find((token) => !allowed.has(token));

@@ -568,13 +568,16 @@ function replyCopiesQuote(reply: string, source: string): boolean {
 
 const REVIEW_REPLY_BANS: readonly { reason: string; pattern: RegExp }[] = [
   { reason: "без звёзд и оценки", pattern: /★|☆|⭐|зв[её]зд|рейтинг|средн\p{L}*\s+балл|из\s+5/iu },
+  { reason: "не хоррор и без пожара", pattern: /хоррор|horror|ужастик|пожар|(?<![\p{L}])огон(?:ь|я|ю|ем|и)(?![\p{L}])/iu },
+  { reason: "шпатель не упоминать", pattern: /шпател/iu },
   { reason: "без сводки, что игра всем нравится", pattern: /все отзыв|игроки пишут|большинство/iu },
   { reason: "ответ не обещает дату и не подтверждает следующие эпизоды", pattern: /выйдет|выпустим|обеща|дата релиза|к релизу|ещё три|еще три|три эпизода|второй эпизод|эпизод\s*(?:ii|2)|\b2\s+эпизод/iu },
   { reason: "не подтверждать частоту выхода и не переносить сроки из ответа разработчика", pattern: /раз в неделю|каждую неделю|еженедел|раз в год|не через год|в скором времени/iu },
   { reason: "не цитировать сравнение с нейрослопом и подсказку про сейф", pattern: /нейрослоп|человеческ\p{L}*\s+труд|для сейфа/iu },
 ];
 
-export function reviewProblem(text: string, review: ReviewSource): string | null {
+/** Цитата, ник, дата и площадка. Ответ команды сюда не входит: он пост не отклоняет. */
+export function reviewHardProblem(text: string, review: ReviewSource): string | null {
   const published = quoteToPublish(review);
   if (!published) return "отзыв не из одобренного списка";
   const day = formatReviewDay(review.date);
@@ -591,13 +594,22 @@ export function reviewProblem(text: string, review: ReviewSource): string | null
   if (!text.includes(platform)) return `площадка отзыва — ${platform}`;
   if (review.platform === "vk-play" && /apps\.apple\.com|app store/iu.test(text)) return "это отзыв VK Play, не App Store";
   if (review.platform === "app-store" && /vkplay\.ru/iu.test(text)) return "это отзыв App Store, не VK Play";
-  if (/★|☆|⭐/.test(text)) return "без звёзд";
+  return null;
+}
+
+/** Тон и содержание ответа. Для публикации это не отказ: ответ меняется на REVIEW_REPLY_FALLBACK. */
+export function reviewSoftProblem(text: string, review: ReviewSource): string | null {
   const reply = reviewReplyOnly(text, review);
+  if (/★|☆|⭐/.test(reply)) return "без звёзд";
   if (!reply.replace(/[^\p{L}\p{N}]+/gu, "").trim()) return "нет ответа команды";
   if (replyCopiesQuote(reply, review.text)) return "ответ пересказывает цитату, оставь её дословной и отдельно";
   if (review.platform === "vk-play" && mentionsPrice(reply)) return "в ответе на отзыв VK Play цену не называть";
   for (const ban of REVIEW_REPLY_BANS) if (ban.pattern.test(reply)) return ban.reason;
   return null;
+}
+
+export function reviewProblem(text: string, review: ReviewSource): string | null {
+  return reviewHardProblem(text, review) ?? reviewSoftProblem(text, review);
 }
 
 export function editorialProblem(text: string, pick: EditorialPick, media?: Media): string | null {
@@ -626,7 +638,7 @@ export function editorialFactNote(pick: EditorialPick): string {
     return "Это пост одной видимой детали одного кадра. Детали из описания кадра можно. Отклоняй реальный прототип двора, адрес Раздольная, чемпионат, предысторию «Инвойс», кто и зачем поставил вещь, игровую механику этих вещей и детали, которых нет на этом кадре.\n";
   }
   const where = reviewPlatformLabel(pick.review.platform);
-  return `Цитата в ёлочках — дословный отзыв из ${where}. Не отклоняй её регистр, опечатки, эмодзи и слова игрока про следующие эпизоды внутри ёлочек. Отклоняй звёзды, число отзывов, сводку «всем нравится», ответ команды с датой или частотой выхода и любые фразы ответа разработчика. В ответе команды отклоняй финал, концовку, развязку и слова, что человек дошёл, доиграл или дочитал до конца: это намёк на финал. Короткую благодарность без этих слов не отклоняй. Никнейм дословный. ${pick.review.platform === "vk-play" ? "Ссылка App Store и цена в этом посте не нужны." : "Ссылка VK Play в этом посте не нужна."}\n`;
+  return `Цитата в ёлочках — дословный отзыв из ${where}. Не отклоняй её регистр, опечатки, эмодзи и слова игрока про следующие эпизоды внутри ёлочек. Ответ команды не отклоняй за тон, длину и бытовую фразу, которой нет в фактах: «надеемся, наушники и тихий вечер вам в этом помогли» — не повод для отказа. Короткую благодарность не отклоняй. Отклоняй только финал, концовку, развязку и слова, что человек дошёл, доиграл или дочитал до конца: это намёк на финал. Никнейм дословный. ${pick.review.platform === "vk-play" ? "Ссылка App Store и цена в этом посте не нужны." : "Ссылка VK Play в этом посте не нужна."}\n`;
 }
 
 export function editorialSteer(pick: EditorialPick, opts?: { quiet?: boolean; replyBudget?: number; withImage?: boolean }): string {
@@ -650,7 +662,7 @@ export function editorialSteer(pick: EditorialPick, opts?: { quiet?: boolean; re
   const where = reviewPlatformLabel(pick.review.platform);
   const mixed = pick.review.mixed ? " Отзыв с оговорками: не делай вид, что все отзывы сплошная похвала." : "";
   const vk = pick.review.platform === "vk-play" ? " Площадка — VK Play: не упоминай App Store и не называй цену." : "";
-  return `Напиши только ответ команды на отзыв в ${where}, ${budget} символов или короче, одна-две короткие фразы, строчными буквами. Цитату, ник, дату и ссылку не пиши и не ставь ёлочки: их добавит код дословно, абзацами. Не пересказывай отзыв. Не обещай дату, не подтверждай число или частоту эпизодов, не пиши «в скором времени» и «не через год», не ставь звёзды и не пиши, что игра всем нравится. Нельзя финал, концовку, развязку и любые слова о прохождении до конца: «дошли до конца», «доиграл», «дочитал», «до финала». Такой ответ отклоняется. Благодарность только нейтральная, например: «спасибо за такие слова, ради них и делаем игру» или «спасибо, что поделились впечатлениями».${mixed}${vk}${opts?.quiet ? " Ссылку не проси." : ""}`;
+  return `Напиши только ответ команды на отзыв в ${where}, ${budget} символов или короче, одна-две короткие фразы, строчными буквами. Цитату, ник, дату и ссылку не пиши и не ставь ёлочки: их добавит код дословно, абзацами. Не пересказывай отзыв. Не обещай дату, не подтверждай число или частоту эпизодов, не пиши «в скором времени» и «не через год», не ставь звёзды и не пиши, что игра всем нравится. Нельзя финал, концовку, развязку и любые слова о прохождении до конца: «дошли до конца», «доиграл», «дочитал», «до финала». Тёплый ответ без этих слов можно. Благодарность, например: «спасибо за такие слова, ради них и делаем игру» или «спасибо, что поделились впечатлениями».${mixed}${vk}${opts?.quiet ? " Ссылку не проси." : ""}`;
 }
 
 /** Сколько символов остаётся ответу, когда цитата, ник и ссылка уже стоят. */
@@ -674,6 +686,14 @@ const NEUTRAL_REVIEW_THANKS = [
   "спасибо за такие слова, ради них и делаем игру.",
   "спасибо, что поделились впечатлениями.",
 ] as const;
+
+/** Ответ, которым заменяем не прошедший мягкие проверки. Пост с ним публикуется. */
+export const REVIEW_REPLY_FALLBACK = "спасибо, что поделились впечатлениями 💛";
+
+const REVIEW_TEXT_MAX = 450;
+
+const REVIEW_REPLY_SPOILER =
+  /ритуал|путешеств\p{L}*\s+во\s+времени|природ\p{L}*\s+артефакт|разгадк\p{L}*\s+убий|кто\s+убийц|тайной\s+комнат|тайную\s+комнат|тайная\s+комнат/iu;
 
 function neutralReviewThanks(review: ReviewSource): string {
   let sum = 0;
@@ -730,6 +750,59 @@ export function assembleReviewPost(rawReply: string, review: ReviewSource, opts?
   let text = parts.join("\n\n");
   if (opts?.link) text += `\n\n${opts.link}`;
   return text;
+}
+
+/** Ссылка отзыва ровно одна. Тихий пост — без адреса. */
+export function reviewLinkProblem(text: string, link?: string): string | null {
+  const urls = (text.match(/https?:\/\/\S+/g) ?? []).map((url) => url.replace(/[.,)]+$/, ""));
+  if (!link) return urls.length ? "тихий пост: без ссылки" : null;
+  if (urls.length !== 1 || urls[0] !== link) return `ссылка должна быть ровно ${link}`;
+  return null;
+}
+
+function reviewLengthProblem(text: string): string | null {
+  if (text.length > REVIEW_TEXT_MAX) return `длина ${text.length} > ${REVIEW_TEXT_MAX}`;
+  return null;
+}
+
+/** Спойлер и финал в ответе команды. Цитату игрока сюда не берём. */
+export function reviewReplyBlocked(text: string, review: ReviewSource): string | null {
+  const reply = reviewReplyOnly(text, review);
+  if (REVIEW_REPLY_FINALE.test(reply) || REVIEW_REPLY_SPOILER.test(reply)) return "в ответе команды спойлер или финал";
+  return null;
+}
+
+export type SettledReview = { text: string; replaced: boolean } | { text: null; problem: string; replaced: false };
+
+/**
+ * Отзыв публикуется, если цитата, ник, площадка, дата, ссылка и длина в порядке,
+ * а в ответе команды нет спойлера и финала. Мягкий провал ответа (фактчек, похожесть,
+ * звёзды, обещание эпизода) заменяет ответ на REVIEW_REPLY_FALLBACK и не пропускает слот.
+ * Другие рубрики эту функцию не вызывают.
+ */
+export function settleReviewDraft(
+  rawReply: string,
+  review: ReviewSource,
+  opts?: { link?: string; softExtra?: string | null },
+): SettledReview {
+  const link = opts?.link;
+  const fallback = assembleReviewPost(REVIEW_REPLY_FALLBACK, review, { link });
+  const model = assembleReviewPost(rawReply, review, { link });
+  const hardOf = (text: string) =>
+    reviewHardProblem(text, review) ?? reviewReplyBlocked(text, review) ?? reviewLinkProblem(text, link) ?? reviewLengthProblem(text);
+  if (!fallback) return { text: null, problem: "не собрался ответ на отзыв", replaced: false };
+  if (!model) {
+    const hardFallback = hardOf(fallback);
+    if (hardFallback) return { text: null, problem: hardFallback, replaced: false };
+    return { text: fallback, replaced: true };
+  }
+  const hard = hardOf(model);
+  if (hard) return { text: null, problem: hard, replaced: false };
+  const soft = reviewSoftProblem(model, review) ?? opts?.softExtra ?? null;
+  if (!soft) return { text: model, replaced: false };
+  const hardFallback = hardOf(fallback);
+  if (hardFallback) return { text: null, problem: hardFallback, replaced: false };
+  return { text: fallback, replaced: true };
 }
 
 export function reviewSimilarityText(text: string, review: ReviewSource): string {

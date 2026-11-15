@@ -205,6 +205,29 @@ export async function releaseScheduledClaim(id: string): Promise<void> {
   await (await db()).del(scheduledLockKey(id));
 }
 
+// Одноразовый пост. Флаг успеха не снимается. Замок — только на время публикации.
+const oneshotKey = (id: string) => `threads:oneshot:${id}`;
+const oneshotLockKey = (id: string) => `threads:oneshot:${id}:lock`;
+const ONESHOT_LOCK_SEC = 16 * 60;
+
+export async function isOneshotPublished(id: string): Promise<boolean> {
+  return (await (await db()).exists(oneshotKey(id))) === 1;
+}
+
+export async function markOneshotPublished(id: string, postId: string): Promise<void> {
+  await (await db()).set(oneshotKey(id), JSON.stringify({ postId, at: new Date().toISOString() }));
+}
+
+/** true — замок наш. false — этот одноразовый пост уже публикует другой запуск. */
+export async function claimOneshot(id: string): Promise<boolean> {
+  const res = await (await db()).set(oneshotLockKey(id), new Date().toISOString(), { NX: true, EX: ONESHOT_LOCK_SEC });
+  return res === "OK";
+}
+
+export async function releaseOneshotClaim(id: string): Promise<void> {
+  await (await db()).del(oneshotLockKey(id));
+}
+
 // Очередь обычных постов «Олоида». Пишется только после успешной публикации.
 const rubricUsedKey = (projectId: string) => `threads:rubric_used:${projectId}`;
 const devFactUsedKey = (projectId: string) => `threads:dev_fact_used:${projectId}`;
