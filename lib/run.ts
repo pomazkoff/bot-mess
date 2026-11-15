@@ -33,21 +33,26 @@ import type { HistoryItem } from "./store.js";
 import type { Channel } from "./channels.js";
 import { pickRegularShown } from "./variety.js";
 import {
+  REVIEW_REPLY_FALLBACK,
   assembleReviewPost,
+  chooseReviewPost,
   diaryMedia,
   diarySimilarityText,
   editorialFactNote,
   editorialFacts,
   editorialSkipReason,
   editorialSteer,
+  extractReviewReply,
   frameMedia,
   framePairProblem,
   editorialProblem,
   isOloidEditorialRubric,
   pickEditorial,
   reviewReplyBudget,
+  reviewReplySoftProblem,
   reviewRetryNote,
   reviewSimilarityText,
+  reviewUsesFallback,
   type EditorialGate,
 } from "./oloidEditorial.js";
 
@@ -100,6 +105,8 @@ export type Draft = {
   studioFactId?: string;
   /** Ссылка слота. Нет — пост без адреса. */
   studioLink?: string;
+  /** Отзыв: ответ команды заменён на нейтральную благодарность, пост не пропущен. */
+  reviewReplyReplaced?: boolean;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -739,9 +746,12 @@ export async function makeDraft(opts: {
     // Пост с кодом: скопированные указания задания («коротко скажи, что…:») срезаем до проверок.
     // Отзыв: цитату, ник и ссылку ставит код. Модель пишет только ответ команды.
     let candidate = isPromo ? stripPromptMeta(drafted.text) : drafted.text;
-    const reviewLink = editorial?.kind === "review" && !quiet ? editorial.review.sourceUrl : undefined;
-    if (editorial?.kind === "review") {
-      const assembled = assembleReviewPost(candidate, editorial.review, { link: reviewLink });
+    const review = editorial?.kind === "review" ? editorial.review : undefined;
+    const reviewLink = review && !quiet ? review.sourceUrl : undefined;
+    let reviewReplyReplaced = false;
+    if (review) {
+      if (reviewReplySoftProblem(extractReviewReply(candidate, review), review)) reviewReplyReplaced = true;
+      const assembled = assembleReviewPost(candidate, review, { link: reviewLink });
       if (!assembled) {
         feedback = "не собрался ответ на отзыв";
         rejected.push(`#${i + 1} ❌ ${feedback}\n${candidate}`);
@@ -749,6 +759,7 @@ export async function makeDraft(opts: {
       }
       candidate = assembled;
     }
+    const reviewFallback = review ? assembleReviewPost(REVIEW_REPLY_FALLBACK, review, { link: reviewLink }) : null;
     const withOptions = [candidate, ...(drafted.options ?? [])].join("\n");
     const check = () => factCheck(candidate, project, editorial ? pictureNote : shown?.note ?? pictureNote, now, {
       rubricId: rubric.id,
@@ -764,34 +775,71 @@ export async function makeDraft(opts: {
     });
     // Заданный код в антиповтор не входит (ни в посте, ни в истории): совпадение по коду — не повтор.
     // У отзыва и дневника из сравнения вынимается дословная вставка: повторяется ответ, не источник.
-    const simBare = editorial?.kind === "review"
-      ? reviewSimilarityText(candidate, editorial.review)
+    const simBare = review
+      ? reviewSimilarityText(candidate, review)
       : editorial?.kind === "diary"
         ? diarySimilarityText(candidate, editorial.entry)
         : candidate;
     const simText = extraCode ? stripExtraCode(simBare, extraCode) : simBare;
-    const simWithOptions = extraCode ? stripExtraCode(withOptions, extraCode) : editorial?.kind === "review" ? simBare : withOptions;
+    const simWithOptions = extraCode ? stripExtraCode(withOptions, extraCode) : review ? simBare : withOptions;
     const simHistory = extraCode ? history.map((h) => ({ ...h, text: stripExtraCode(h.text, extraCode) })) : history;
-    const hard =
-      (editorial ? editorialProblem(candidate, editorial, media) : null) ??
-      ruleCheck(candidate, project, now, rubric, linkContent, promoCode, quiet, devFact?.text, reviewLink ?? extraLink) ??
-      (extraCode ? extraCodeProblem(candidate, extraCode) : null) ??
-      (project.id === "oloid" ? spatulaProblem(withOptions) ?? tiredOloidCopyProblem(withOptions) : null) ??
-      appStoreCodeProblem(candidate, project.id, rubric.id, promoCode) ??
-      appStorePriceProblem(candidate, project.id, rubric.id) ??
-      appStoreMomentProblem(candidate, project.id, rubric.id) ??
-      vkPlayProblem(candidate, project.id, rubric.id) ??
-      (vkAngle ? vkPlayOpeningProblem(candidate, history) : null) ??
-      (isPromo ? promptMetaProblem(candidate) : null) ??
-      (detective ? detectiveRefProblem(candidate, history, detective) : null);
-    const soft = hard
+    // Жёсткие проверки. У отзыва scan — текст, который реально уходит: ответ уже мог быть заменён.
+    const mechanical = (text: string, scan = text): string | null =>
+      (editorial ? editorialProblem(text, editorial, media) : null) ??
+      ruleCheck(text, project, now, rubric, linkContent, promoCode, quiet, devFact?.text, reviewLink ?? extraLink) ??
+      (extraCode ? extraCodeProblem(text, extraCode) : null) ??
+      (project.id === "oloid" ? spatulaProblem(scan) ?? tiredOloidCopyProblem(scan) : null) ??
+      appStoreCodeProblem(text, project.id, rubric.id, promoCode) ??
+      appStorePriceProblem(text, project.id, rubric.id) ??
+      appStoreMomentProblem(text, project.id, rubric.id) ??
+      vkPlayProblem(text, project.id, rubric.id) ??
+      (vkAngle ? vkPlayOpeningProblem(text, history) : null) ??
+      (isPromo ? promptMetaProblem(text) : null) ??
+      (detective ? detectiveRefProblem(text, history, detective) : null);
+    let hard = mechanical(candidate, withOptions);
+    if (review && hard) {
+      const picked = chooseReviewPost({
+        candidate,
+        fallback: reviewFallback,
+        candidateProblem: hard,
+        fallbackProblem: reviewFallback ? mechanical(reviewFallback) : hard,
+      });
+      if (!picked.problem) {
+        rejected.push(`#${i + 1} ответ команды заменён (${hard})`);
+        candidate = picked.text;
+        reviewReplyReplaced = true;
+        hard = null;
+      } else {
+        hard = picked.problem;
+      }
+    }
+    // Похожесть ответа отзыв не снимает: сравнивается как раз он, а цитата из сравнения вынута.
+    // Другие рубрики антиповтор не ослабляет.
+    const soft = hard || review
       ? null
       : repeatedEnding(simText, simHistory, project.id) ??
         tooSimilar(simText, simHistory, isPromo) ??
         (project.id === "oloid" ? oloidRepeatProblem(simWithOptions, simHistory, now, editorial?.kind === "frame" ? editorial.frame.detailIds : []) : null);
     let problem = hard ?? soft;
     if (!problem) {
-      problem = await check();
+      // Нейтральная благодарность уже проверена кодом. Второй проход про неё пост не снимает.
+      if (!(review && reviewUsesFallback(candidate, review))) problem = await check();
+      if (problem && review) {
+        const picked = chooseReviewPost({
+          candidate,
+          fallback: reviewFallback,
+          candidateProblem: problem,
+          fallbackProblem: reviewFallback ? mechanical(reviewFallback) : problem,
+        });
+        if (!picked.problem) {
+          rejected.push(`#${i + 1} фактчек к ответу не останавливает пост (${problem})`);
+          candidate = picked.text;
+          reviewReplyReplaced = true;
+          problem = null;
+        } else {
+          problem = picked.problem;
+        }
+      }
     } else if (isPromo && !hard) {
       // Только похожесть: фактчек (спойлеры, выдумки) всё равно обязателен, иначе в запас не берём.
       const fc = await check();
@@ -804,7 +852,7 @@ export async function makeDraft(opts: {
       }
     }
     if (problem) {
-      feedback = editorial?.kind === "review" ? reviewRetryNote(problem) : problem;
+      feedback = review ? reviewRetryNote(problem) : problem;
       hints.promoRejected.push(candidate);
       hints.vkRejected.push(candidate);
       rejected.push(`#${i + 1}${isPromo && promoAngle ? ` [${promoAngle.label}]` : vkAngle ? ` [${vkAngle.label}]` : ""} ❌ ${problem}\n${candidate}`);
@@ -819,7 +867,7 @@ export async function makeDraft(opts: {
     }
     const poll = wantPoll && !pollErr && drafted.options ? toPollAttachment(drafted.options) : undefined;
     if (pollErr) rejected.push(`опрос снят, пост без опроса: ${pollErr}: ${candidate}`);
-    return { ...base, ...(isPromo ? { topic } : {}), ...withAngle(), text: candidate, poll, rejected };
+    return { ...base, ...(isPromo ? { topic } : {}), ...withAngle(), text: candidate, poll, rejected, reviewReplyReplaced };
   }
   if (fallback) {
     rejected.push(`⚠️ вышел запасной вариант: прошёл жёсткие проверки и фактчек, похожесть ${fallback.score.toFixed(2)}`);

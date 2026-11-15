@@ -9,6 +9,7 @@ import { draftKeyboard, draftTelegramText, newDraftId } from "../lib/drafts.js";
 import { notify } from "../lib/notify.js";
 import { channelById } from "../lib/channels.js";
 import { publishDueScheduled } from "../lib/scheduled.js";
+import { takeOloidForcedReview } from "../lib/oloidForcedReview.js";
 
 // Публикующий эндпоинт. Вызывается только Vercel Cron (заголовок Authorization: Bearer <CRON_SECRET>).
 // ?channel=<id> — аккаунт Threads из lib/channels.ts (по умолчанию pomazkof).
@@ -111,6 +112,53 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Аккаунт ещё не подключён — молча пропускаем, чтобы не слать ошибки в Telegram на каждом слоте
   if (!process.env[channel.tokenEnv]?.trim()) return res.json({ skipped: `нет ${channel.tokenEnv}` });
 
+  // Одноразовый отзыв mufasa093. Снять: OLOID_FORCED_REVIEW_ENABLED = false в lib/oloidForcedReview.ts.
+  // Внеплановый ?theme= его не забирает. Уже вышедший пост не повторяется, слот идёт обычным.
+  if (!theme) {
+    try {
+      const forced = await takeOloidForcedReview(channel, now, dry);
+      if (forced.kind !== "none") {
+        if (forced.kind === "dry") {
+          return res.json({
+            dry: true,
+            forcedReview: forced.editorialId,
+            channel: channel.id,
+            rubric: "review",
+            topic: forced.topic,
+            length: forced.text.length,
+            text: forced.text,
+          });
+        }
+        if (forced.kind === "locked") return res.json({ skipped: "forced review lock", channel: channel.id });
+        if (forced.kind === "too-long") {
+          await notify(`⚠️ Threads-бот (${channel.name}): одноразовый отзыв не опубликован, длина ${forced.length} > 500.`);
+          return res.json({ posted: false, channel: channel.id, rejected: [`длина ${forced.length} > 500`] });
+        }
+        if (forced.kind === "failed") {
+          await notify(`❌ Threads-бот упал (${channel.name}, одноразовый отзыв): ${forced.error}`);
+          return res.status(500).json({ error: forced.error });
+        }
+        const historyNote = forced.historyError ? `\nИстория не записалась: ${forced.historyError}` : "";
+        await notify(`✅ Опубликовано (${channel.name}, review, одноразовый отзыв ${forced.editorialId}${forced.topicTag ? `, тема Threads: ${forced.topicTag}` : ""}):${historyNote}\n\n${forced.text}`);
+        return res.json({
+          posted: true,
+          forcedReview: forced.editorialId,
+          channel: channel.id,
+          rubric: "review",
+          topic: forced.topic,
+          topicTag: forced.topicTag,
+          postId: forced.postId,
+          text: forced.text,
+          historyError: forced.historyError,
+        });
+      }
+    } catch (e: any) {
+      console.error(e);
+      await notify(`❌ Threads-бот упал (${channel.name}, одноразовый отзыв): ${e?.message ?? e}`);
+      return res.status(500).json({ error: String(e?.message ?? e) });
+    }
+  }
+
   try {
     const history = await getHistory();
     // null — App Store-поста ещё не было. Дата пишется ниже, только после успешной публикации.
@@ -145,7 +193,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       mediaUsed: rotation?.mediaUsed,
       editorialUsed: rotation?.editorialUsed,
     });
-    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, lineId, tone, regularCount, mediaId, provocationFormat, provocationCount, fallback, factIds, vkAngle, editorialId, copyHook, copyClosing, studioSubject, studioFactId, studioLink } = draft;
+    const { project, rubricId, topic, topicTag, media, text, rejected, promoCode, promoLeft, skipReason, quiet, poll, dateHook, devFactId, lineId, tone, regularCount, mediaId, provocationFormat, provocationCount, fallback, factIds, vkAngle, editorialId, copyHook, copyClosing, studioSubject, studioFactId, studioLink, reviewReplyReplaced } = draft;
     const where = `${channel.name} · ${project.name}`;
 
     // Ссылка VK Play ещё заглушка: пост не генерируем и не публикуем. День закрываем, чтобы следующий слот суток не пропускался тоже.
@@ -353,6 +401,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       dateHook ? `повод ${dateHook}` : "",
       devFactId ? `факт ${devFactId}` : "",
       editorialId ? `источник ${editorialId}` : "",
+      reviewReplyReplaced ? "ответ заменён на нейтральный" : "",
       copyHook ? `заход ${copyHook}` : "",
       copyClosing ? `концовка ${copyClosing}` : "",
       provocationFormat ? `формат ${provocationFormat}` : "",

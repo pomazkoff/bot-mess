@@ -205,6 +205,30 @@ export async function releaseScheduledClaim(id: string): Promise<void> {
   await (await db()).del(scheduledLockKey(id));
 }
 
+// Одноразовый пост «Олоида». Флаг — после успешной публикации, замок — на время публикации.
+// Снять пост: OLOID_FORCED_REVIEW_ENABLED = false в lib/oloidForcedReview.ts. Ключ можно не стирать.
+const forcedReviewKey = (id: string) => `threads:oloid_forced_review:${id}`;
+const forcedReviewLockKey = (id: string) => `threads:oloid_forced_review:${id}:lock`;
+const FORCED_REVIEW_LOCK_SEC = 16 * 60;
+
+export async function isForcedReviewPublished(id: string): Promise<boolean> {
+  return (await (await db()).exists(forcedReviewKey(id))) === 1;
+}
+
+export async function markForcedReviewPublished(id: string, postId: string): Promise<void> {
+  await (await db()).set(forcedReviewKey(id), JSON.stringify({ postId, at: new Date().toISOString() }));
+}
+
+/** true — замок наш. false — этот одноразовый пост уже публикует другой запуск. */
+export async function claimForcedReview(id: string): Promise<boolean> {
+  const res = await (await db()).set(forcedReviewLockKey(id), new Date().toISOString(), { NX: true, EX: FORCED_REVIEW_LOCK_SEC });
+  return res === "OK";
+}
+
+export async function releaseForcedReviewClaim(id: string): Promise<void> {
+  await (await db()).del(forcedReviewLockKey(id));
+}
+
 // Очередь обычных постов «Олоида». Пишется только после успешной публикации.
 const rubricUsedKey = (projectId: string) => `threads:rubric_used:${projectId}`;
 const devFactUsedKey = (projectId: string) => `threads:dev_fact_used:${projectId}`;

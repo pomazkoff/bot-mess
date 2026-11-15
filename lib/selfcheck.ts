@@ -70,10 +70,13 @@ import {
   OLOID_DIARY_ENTRIES,
   OLOID_FRAME_SOURCES,
   OLOID_REVIEWS,
+  REVIEW_REPLY_FALLBACK,
   assembleReviewPost,
+  chooseReviewPost,
   diaryMedia,
   diaryProblem,
   editorialRubricOpen,
+  extractReviewReply,
   frameMedia,
   framePairProblem,
   frameProblem,
@@ -81,12 +84,17 @@ import {
   editorialFactNote,
   editorialSteer,
   pickEditorial,
+  publishedReviewReply,
   quoteToPublish,
+  reviewFactCheckIsReplyProblem,
   reviewProblem,
   reviewReplyBudget,
+  reviewReplySoftProblem,
   reviewRetryNote,
+  reviewUsesFallback,
 } from "./oloidEditorial.js";
 import { pickRegularShown, shownAssetFiles } from "./variety.js";
+import { OLOID_FORCED_REVIEW_ENABLED, OLOID_FORCED_REVIEW_ID, OLOID_FORCED_REVIEW_REDIS_KEY, forcedReviewAction, oloidForcedReviewText } from "./oloidForcedReview.js";
 
 const oloid = PROJECTS.find((project) => project.id === "oloid");
 assert.ok(oloid);
@@ -763,7 +771,10 @@ assert.ok(mufasaPost.includes("Олоид - первая"));
 assert.equal(mufasaPost.includes("олоид - первая"), false);
 assert.ok(mufasaPost.includes("🔥"));
 assert.ok(reviewProblem(mufasaPost.replace("Жду", "Ждём"), mufasa));
-assert.ok(reviewProblem(assembleReviewPost("второй эпизод выйдет скоро.", mufasa, { link: OLOID_APP_STORE_URL }) ?? "", mufasa));
+assert.ok(reviewProblem(mufasaPost.replace("спасибо, что написали.", "второй эпизод выйдет скоро."), mufasa));
+const episodeFixed = assembleReviewPost("второй эпизод выйдет скоро.", mufasa, { link: OLOID_APP_STORE_URL });
+assert.equal(episodeFixed ? publishedReviewReply(episodeFixed, mufasa) : "", REVIEW_REPLY_FALLBACK);
+assert.equal(episodeFixed ? reviewProblem(episodeFixed, mufasa) : "нет поста", null);
 assert.ok(reviewProblem(mufasaPost.replace("спасибо", "спасибо ★"), mufasa));
 assert.equal(/финал|концовк|развязк|до\s+конца/iu.test(mufasa.text), false);
 assert.ok(mufasa.text.includes("ещё три эпизода"));
@@ -782,7 +793,8 @@ const reviewFact = editorialFactNote(reviewPick);
 assert.ok(reviewFact.includes("дочитал до конца"));
 assert.ok(reviewFact.includes("следующие эпизоды"));
 assert.ok(reviewFact.includes("Короткую благодарность"));
-const neutralThanks = ["спасибо за такие слова, ради них и делаем игру.", "спасибо, что поделились впечатлениями."];
+assert.ok(reviewFact.includes(REVIEW_REPLY_FALLBACK));
+assert.ok(reviewFact.includes("додумывает"));
 for (const review of OLOID_REVIEWS) {
   const fixed = assembleReviewPost("Спасибо, что дошли до конца и написали об этом…", review, { link: review.sourceUrl });
   assert.ok(fixed, review.id);
@@ -790,7 +802,7 @@ for (const review of OLOID_REVIEWS) {
   assert.ok(published, review.id);
   assert.ok(fixed.includes(published.text), review.id);
   assert.equal(fixed.includes("дошли до конца"), false, review.id);
-  assert.ok(neutralThanks.some((line) => fixed.includes(line)), review.id);
+  assert.equal(publishedReviewReply(fixed, review), REVIEW_REPLY_FALLBACK, review.id);
   assert.equal(reviewProblem(fixed, review), null, review.id);
   assert.equal(rotationSafetyProblem(fixed, "review"), null, review.id);
   assert.equal(ruleCheck(fixed, oloid, evening, reviewRubric, "oloid-review", undefined, false, undefined, review.sourceUrl), null, review.id);
@@ -813,10 +825,12 @@ for (const bad of [
 }
 const keptTail = assembleReviewPost("спасибо, что дошли до конца и написали об этом.\n\nнам важно это читать.", mufasa, { link: OLOID_APP_STORE_URL });
 assert.ok(keptTail);
-assert.ok(keptTail.includes("нам важно это читать"));
+assert.equal(keptTail.includes("нам важно это читать"), false);
+assert.equal(publishedReviewReply(keptTail, mufasa), REVIEW_REPLY_FALLBACK);
 assert.equal(keptTail.includes("дошли до конца"), false);
 const sameLine = assembleReviewPost("спасибо, что дошли до конца. нам важно это читать.", mufasa, { link: OLOID_APP_STORE_URL });
-assert.ok(sameLine?.includes("нам важно это читать."));
+assert.equal(sameLine?.includes("нам важно это читать."), false);
+assert.equal(sameLine ? publishedReviewReply(sameLine, mufasa) : "", REVIEW_REPLY_FALLBACK);
 assert.equal(sameLine?.includes("дошли до конца"), false);
 assert.ok(keptTail.includes(mufasa.text));
 assert.equal(reviewProblem(keptTail, mufasa), null);
@@ -837,8 +851,12 @@ assert.ok(finaleNote.includes("дошёл"));
 assert.equal(reviewRetryNote("слишком похоже на пост от 2026-11-01"), "слишком похоже на пост от 2026-11-01");
 assert.equal(reviewRetryNote("концовка повторяет недавний пост, придумай другую"), "концовка повторяет недавний пост, придумай другую");
 assert.ok(reviewRetryNote("намёк на финал: дошли до конца").includes("Цитату и ник не меняй"));
-const pasted = assembleReviewPost("нам написали: Картинка, звук, музыка, сюжет – все. спасибо.", odosinskiy, { link: OLOID_APP_STORE_URL });
+const pastedGood = assembleReviewPost("спасибо, что написали.", odosinskiy, { link: OLOID_APP_STORE_URL });
+const pasted = pastedGood?.replace("спасибо, что написали.", "нам написали: Картинка, звук, музыка, сюжет – все. спасибо.");
 assert.ok(pasted && reviewProblem(pasted, odosinskiy));
+const pastedFixed = assembleReviewPost("нам написали: Картинка, звук, музыка, сюжет – все. спасибо.", odosinskiy, { link: OLOID_APP_STORE_URL });
+assert.equal(pastedFixed ? publishedReviewReply(pastedFixed, odosinskiy) : "", REVIEW_REPLY_FALLBACK);
+assert.equal(pastedFixed ? reviewProblem(pastedFixed, odosinskiy) : "нет поста", null);
 assert.ok(assembleReviewPost("спасибо, что написали.", solnechny, { link: OLOID_APP_STORE_URL })?.includes("развилках \n\nбуду ждать второй эпизод"));
 assert.ok(assembleReviewPost("спасибо, что написали.", odosinskiy, { link: OLOID_APP_STORE_URL })?.includes("Одосинский"));
 assert.ok(assembleReviewPost("спасибо, что написали.", odosinskiy, { link: OLOID_APP_STORE_URL })?.includes("Ждем второй эпизод"));
@@ -867,6 +885,9 @@ assert.ok(mornPost);
 assert.equal(mornPost.includes("нейрослоп"), false);
 assert.equal(mornPost.includes("сейфа"), false);
 assert.ok(reviewProblem(`${mornPost}\n\nприятно видеть человеческий труд`, morn));
+const mornFixed = assembleReviewPost("приятно видеть человеческий труд", morn, { link: OLOID_APP_STORE_URL });
+assert.equal(mornFixed ? publishedReviewReply(mornFixed, morn) : "", REVIEW_REPLY_FALLBACK);
+assert.equal(mornFixed ? reviewProblem(mornFixed, morn) : "нет поста", null);
 const galina = OLOID_REVIEWS.find((review) => review.handle === "Галина Марина");
 assert.ok(galina?.excerpt && galina.text.includes(galina.excerpt));
 assert.equal(galina.text.includes("😅"), true);
@@ -882,9 +903,76 @@ assert.ok(mixedPost);
 assert.equal(reviewProblem(mixedPost, mixed), null);
 assert.ok(mixedPost.includes("VK Play"));
 assert.equal(mixedPost.includes("App Store"), false);
-assert.ok(reviewProblem(assembleReviewPost("если раз в неделю, нам тоже так лучше.", mixed, { link: OLOID_VKPLAY_URL }) ?? "", mixed));
-assert.ok(reviewProblem(assembleReviewPost("второй эпизод выпустим уже в скором времени.", mixed, { link: OLOID_VKPLAY_URL }) ?? "", mixed));
-assert.ok(reviewProblem(assembleReviewPost("спасибо. цена 199 ₽.", mixed, { link: OLOID_VKPLAY_URL }) ?? "", mixed));
+assert.ok(reviewProblem(mixedPost.replace("спасибо, что написали и про шероховатости тоже.", "если раз в неделю, нам тоже так лучше."), mixed));
+assert.ok(reviewProblem(mixedPost.replace("спасибо, что написали и про шероховатости тоже.", "второй эпизод выпустим уже в скором времени."), mixed));
+assert.ok(reviewProblem(mixedPost.replace("спасибо, что написали и про шероховатости тоже.", "спасибо. цена 199 ₽."), mixed));
+for (const badReply of ["если раз в неделю, нам тоже так лучше.", "второй эпизод выпустим уже в скором времени.", "спасибо. цена 199 ₽."]) {
+  const fixed = assembleReviewPost(badReply, mixed, { link: OLOID_VKPLAY_URL });
+  assert.equal(fixed ? publishedReviewReply(fixed, mixed) : "", REVIEW_REPLY_FALLBACK, badReply);
+  assert.equal(fixed?.includes("199"), false, badReply);
+  assert.equal(fixed ? reviewProblem(fixed, mixed) : "нет поста", null, badReply);
+  assert.equal(fixed ? ruleCheck(fixed, oloid, evening, reviewRubric, "oloid-review", undefined, false, undefined, OLOID_VKPLAY_URL) : "нет поста", null, badReply);
+}
+const headphones = "надеемся, наушники и тихий вечер вам в этом помогли";
+assert.equal(reviewReplySoftProblem(headphones, mufasa), null);
+const headphonesPost = assembleReviewPost(headphones, mufasa, { link: OLOID_APP_STORE_URL });
+assert.ok(headphonesPost?.includes(headphones));
+assert.equal(headphonesPost ? reviewProblem(headphonesPost, mufasa) : "нет поста", null);
+const ownerFactReason = "Ответ команды — не короткая благодарность. Фраза «надеемся, наушники и тихий вечер вам в этом помогли» додумывает, как именно играл автор отзыва";
+assert.equal(reviewFactCheckIsReplyProblem(ownerFactReason), true);
+assert.equal(reviewFactCheckIsReplyProblem("цитата переписана: нужна дословная, одной парой ёлочек"), false);
+assert.equal(reviewFactCheckIsReplyProblem("никнейм изменён"), false);
+assert.equal(reviewFactCheckIsReplyProblem("дата отзыва изменена"), false);
+assert.equal(reviewFactCheckIsReplyProblem("посторонняя или искажённая ссылка — вставь ровно эту"), false);
+const fallbackPost = assembleReviewPost(REVIEW_REPLY_FALLBACK, mufasa, { link: OLOID_APP_STORE_URL });
+assert.ok(fallbackPost);
+assert.equal(reviewUsesFallback(fallbackPost, mufasa), true);
+const rescued = chooseReviewPost({
+  candidate: headphonesPost ?? "",
+  fallback: fallbackPost,
+  candidateProblem: ownerFactReason,
+  fallbackProblem: reviewProblem(fallbackPost, mufasa) ?? ruleCheck(fallbackPost, oloid, evening, reviewRubric, "oloid-review", undefined, false, undefined, OLOID_APP_STORE_URL),
+});
+assert.equal(rescued.problem, null);
+assert.equal(rescued.replaced, true);
+assert.equal(rescued.text, fallbackPost);
+assert.equal(rescued.text.includes(headphones), false);
+const structural = chooseReviewPost({
+  candidate: mufasaPost.replace("Жду", "Ждём"),
+  fallback: fallbackPost,
+  candidateProblem: "цитата переписана",
+  fallbackProblem: "цитата переписана",
+});
+assert.equal(structural.problem, "цитата переписана");
+assert.equal(structural.replaced, false);
+const backstageRubric = oloid.rubrics.find((rubric) => rubric.id === "backstage");
+assert.equal(ruleCheck("два эмодзи 💛🔥", oloid, evening, backstageRubric, "oloid-backstage"), "больше одного эмодзи");
+assert.equal(ruleCheck(fallbackPost, oloid, evening, reviewRubric, "oloid-review", undefined, false, undefined, OLOID_APP_STORE_URL), null);
+assert.equal(extractReviewReply("спасибо, что дошли до конца.", mufasa).includes("дошли до конца"), true);
+
+const forcedText = oloidForcedReviewText();
+assert.equal(OLOID_FORCED_REVIEW_ENABLED, true);
+assert.equal(OLOID_FORCED_REVIEW_ID, mufasa.id);
+assert.equal(forcedText, `«${mufasa.text}»
+
+mufasa093, App Store, 23 октября 2026
+
+${REVIEW_REPLY_FALLBACK}
+
+https://apps.apple.com/ru/app/id6817809325`);
+assert.ok(forcedText.length <= 450, String(forcedText.length));
+assert.equal(forcedText.includes("http"), true);
+assert.equal(reviewProblem(forcedText, mufasa), null);
+assert.equal(ruleCheck(forcedText, oloid, evening, reviewRubric, "oloid-review", undefined, false, undefined, OLOID_APP_STORE_URL), null);
+assert.equal(forcedReviewAction({ enabled: true, channelId: "oloid", theme: false, published: false, dry: false, claimed: true }), "publish");
+assert.equal(forcedReviewAction({ enabled: true, channelId: "oloid", theme: false, published: false, dry: true, claimed: false }), "dry");
+assert.equal(forcedReviewAction({ enabled: true, channelId: "oloid", theme: false, published: true, dry: false, claimed: true }), "none");
+assert.equal(forcedReviewAction({ enabled: true, channelId: "oloid", theme: false, published: false, dry: false, claimed: false }), "locked");
+assert.equal(forcedReviewAction({ enabled: false, channelId: "oloid", theme: false, published: false, dry: false, claimed: true }), "none");
+assert.equal(forcedReviewAction({ enabled: true, channelId: "pomazkof", theme: false, published: false, dry: false, claimed: true }), "none");
+assert.equal(forcedReviewAction({ enabled: true, channelId: "oloid", theme: true, published: false, dry: false, claimed: true }), "none");
+assert.equal(OLOID_FORCED_REVIEW_REDIS_KEY, `threads:oloid_forced_review:${OLOID_FORCED_REVIEW_ID}`);
+
 const egi = OLOID_REVIEWS.find((review) => review.handle === "egipetskayasila01");
 assert.ok(egi);
 assert.equal(egi.date, "2026-10-22");
@@ -1698,6 +1786,12 @@ assert.ok(storeSrc.includes("threads:draft:"));
 assert.ok(storeSrc.includes("threads:draft_edit:"));
 assert.ok(storeSrc.includes("threads:draft_edit_last:"));
 assert.ok(storeSrc.includes("NX: true"));
+assert.ok(storeSrc.includes("threads:oloid_forced_review:"));
+const forcedSrc = readFileSync(new URL("./oloidForcedReview.ts", import.meta.url), "utf8");
+assert.ok(forcedSrc.includes("OLOID_FORCED_REVIEW_ENABLED = false"));
+assert.ok(forcedSrc.includes("threads:oloid_forced_review:review-asc-mufasa093-2026-10-23"));
+assert.ok(cronSrc.includes("takeOloidForcedReview"));
+assert.ok(cronSrc.includes("OLOID_FORCED_REVIEW_ENABLED"));
 const webhookSrc = readFileSync(new URL("../scripts/set-telegram-webhook.mjs", import.meta.url), "utf8");
 assert.ok(webhookSrc.includes("setWebhook"));
 assert.ok(webhookSrc.includes("secret_token"));

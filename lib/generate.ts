@@ -539,7 +539,9 @@ export function ruleCheck(
     if (tool) return tool;
   }
   if (text.length > MAX_LEN) return `длина ${text.length} > ${MAX_LEN}`;
-  if ((text.match(EMOJI) || []).length > 1) return "больше одного эмодзи";
+  // В отзыве эмодзи может быть в цитате игрока, и ещё одно 💛 в ответе команды.
+  // Остальные рубрики по-прежнему держат один эмодзи.
+  if (rubric?.id !== "review" && (text.match(EMOJI) || []).length > 1) return "больше одного эмодзи";
   if ((p.id === "buro" || p.id === "studio") && /жеглов|штирлиц|пуаро/iu.test(text)) return "Жеглов, Штирлиц и Пуаро не упоминать";
   const withoutUrls = text.replace(/https?:\/\/\S+/g, " ");
   for (const re of BANNED) if (re.test(re.source === "#\\S" ? withoutUrls : text)) return `запрещённый паттерн ${re}`;

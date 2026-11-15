@@ -574,6 +574,13 @@ const REVIEW_REPLY_BANS: readonly { reason: string; pattern: RegExp }[] = [
   { reason: "не цитировать сравнение с нейрослопом и подсказку про сейф", pattern: /нейрослоп|человеческ\p{L}*\s+труд|для сейфа/iu },
 ];
 
+/**
+ * Нейтральная замена ответа команды. Пост из-за ответа не пропускается:
+ * мягкий провал (не короткая благодарность, домысел, финал) подставляет эту фразу.
+ * Снять саму фразу нельзя, не заменив её здесь и в одноразовом посте.
+ */
+export const REVIEW_REPLY_FALLBACK = "спасибо, что поделились впечатлениями 💛";
+
 export function reviewProblem(text: string, review: ReviewSource): string | null {
   const published = quoteToPublish(review);
   if (!published) return "отзыв не из одобренного списка";
@@ -626,7 +633,7 @@ export function editorialFactNote(pick: EditorialPick): string {
     return "Это пост одной видимой детали одного кадра. Детали из описания кадра можно. Отклоняй реальный прототип двора, адрес Раздольная, чемпионат, предысторию «Инвойс», кто и зачем поставил вещь, игровую механику этих вещей и детали, которых нет на этом кадре.\n";
   }
   const where = reviewPlatformLabel(pick.review.platform);
-  return `Цитата в ёлочках — дословный отзыв из ${where}. Не отклоняй её регистр, опечатки, эмодзи и слова игрока про следующие эпизоды внутри ёлочек. Отклоняй звёзды, число отзывов, сводку «всем нравится», ответ команды с датой или частотой выхода и любые фразы ответа разработчика. В ответе команды отклоняй финал, концовку, развязку и слова, что человек дошёл, доиграл или дочитал до конца: это намёк на финал. Короткую благодарность без этих слов не отклоняй. Никнейм дословный. ${pick.review.platform === "vk-play" ? "Ссылка App Store и цена в этом посте не нужны." : "Ссылка VK Play в этом посте не нужна."}\n`;
+  return `Цитата в ёлочках — дословный отзыв из ${where}. Не отклоняй её регистр, опечатки, эмодзи и слова игрока про следующие эпизоды внутри ёлочек. Отклоняй звёзды, число отзывов, сводку «всем нравится», ответ команды с датой или частотой выхода и любые фразы ответа разработчика. В ответе команды отклоняй финал, концовку, развязку и слова, что человек дошёл, доиграл или дочитал до конца: это намёк на финал. Отклоняй ответ, который не короткая благодарность или додумывает, как именно играл автор отзыва. Короткую благодарность без этих слов не отклоняй. Фразу «${REVIEW_REPLY_FALLBACK}» не отклоняй и не считай новым фактом. Никнейм дословный. ${pick.review.platform === "vk-play" ? "Ссылка App Store и цена в этом посте не нужны." : "Ссылка VK Play в этом посте не нужна."}\n`;
 }
 
 export function editorialSteer(pick: EditorialPick, opts?: { quiet?: boolean; replyBudget?: number; withImage?: boolean }): string {
@@ -650,7 +657,7 @@ export function editorialSteer(pick: EditorialPick, opts?: { quiet?: boolean; re
   const where = reviewPlatformLabel(pick.review.platform);
   const mixed = pick.review.mixed ? " Отзыв с оговорками: не делай вид, что все отзывы сплошная похвала." : "";
   const vk = pick.review.platform === "vk-play" ? " Площадка — VK Play: не упоминай App Store и не называй цену." : "";
-  return `Напиши только ответ команды на отзыв в ${where}, ${budget} символов или короче, одна-две короткие фразы, строчными буквами. Цитату, ник, дату и ссылку не пиши и не ставь ёлочки: их добавит код дословно, абзацами. Не пересказывай отзыв. Не обещай дату, не подтверждай число или частоту эпизодов, не пиши «в скором времени» и «не через год», не ставь звёзды и не пиши, что игра всем нравится. Нельзя финал, концовку, развязку и любые слова о прохождении до конца: «дошли до конца», «доиграл», «дочитал», «до финала». Такой ответ отклоняется. Благодарность только нейтральная, например: «спасибо за такие слова, ради них и делаем игру» или «спасибо, что поделились впечатлениями».${mixed}${vk}${opts?.quiet ? " Ссылку не проси." : ""}`;
+  return `Напиши только ответ команды на отзыв в ${where}, ${budget} символов или короче, одна-две короткие фразы, строчными буквами. Цитату, ник, дату и ссылку не пиши и не ставь ёлочки: их добавит код дословно, абзацами. Не пересказывай отзыв. Не обещай дату, не подтверждай число или частоту эпизодов, не пиши «в скором времени» и «не через год», не ставь звёзды и не пиши, что игра всем нравится. Нельзя финал, концовку, развязку и любые слова о прохождении до конца: «дошли до конца», «доиграл», «дочитал», «до финала». Не додумывай, как именно человек играл. Если ответ не короткий и не нейтральный, код заменит его на «${REVIEW_REPLY_FALLBACK}», пост из-за этого не пропускается. Благодарность только нейтральная, например: «спасибо за такие слова, ради них и делаем игру» или «${REVIEW_REPLY_FALLBACK}».${mixed}${vk}${opts?.quiet ? " Ссылку не проси." : ""}`;
 }
 
 /** Сколько символов остаётся ответу, когда цитата, ник и ссылка уже стоят. */
@@ -670,30 +677,27 @@ export function reviewReplyBudget(review: ReviewSource, withLink: boolean): numb
 const REVIEW_REPLY_FINALE =
   /до(?:\s+\p{L}+){0,2}\s+конца|финал|концовк|развязк|доигра|дочита|конц(?:а|е|у|ом)\s+(?:игры|эпизода|истории|прохождения)|(?<![\p{L}])(?:прошли|прошёл|прошла|прошел)(?![\p{L}])(?:\s+\p{L}+){0,3}\s+(?:игру|эпизод|историю|новеллу)|(?<![\p{L}])закончил\p{L}*(?:\s+\p{L}+){0,3}\s+(?:игру|эпизод|историю|прохождение|новеллу)/iu;
 
-const NEUTRAL_REVIEW_THANKS = [
-  "спасибо за такие слова, ради них и делаем игру.",
-  "спасибо, что поделились впечатлениями.",
-] as const;
-
-function neutralReviewThanks(review: ReviewSource): string {
-  let sum = 0;
-  for (let i = 0; i < review.id.length; i++) sum += review.id.charCodeAt(i);
-  return NEUTRAL_REVIEW_THANKS[sum % NEUTRAL_REVIEW_THANKS.length];
+/** Мягкие претензии к ответу команды. Пост из-за них не отклоняется: ответ заменяется на REVIEW_REPLY_FALLBACK. */
+export function reviewReplySoftProblem(reply: string, review: ReviewSource): string | null {
+  if (!reply.replace(/[^\p{L}\p{N}]+/gu, "").trim()) return "нет ответа команды";
+  if (replyCopiesQuote(reply, review.text)) return "ответ пересказывает цитату";
+  if (REVIEW_REPLY_FINALE.test(reply)) return "в ответе финал или слова, что человек дошёл до конца";
+  if (mentionsPrice(reply)) return "в ответе цена";
+  for (const ban of REVIEW_REPLY_BANS) if (ban.pattern.test(reply)) return ban.reason;
+  const emoji = reply.match(/\p{Extended_Pictographic}/gu) ?? [];
+  if (emoji.some((item) => item !== "💛") || emoji.length > 1) return "в ответе лишний эмодзи";
+  return null;
 }
 
-function withoutFinaleSentences(paragraph: string): string {
-  return paragraph
-    .split(/(?<=[.!?…])\s+/u)
-    .map((sentence) => sentence.trim())
-    .filter((sentence) => sentence && !REVIEW_REPLY_FINALE.test(sentence))
-    .join(" ");
-}
-
-/** Снимает из ответа команды фразы про финал и «дошли до конца». Цитату игрока не получает. */
-function neutralizeReviewFinale(reply: string, review: ReviewSource): string {
-  if (!reply.trim() || !REVIEW_REPLY_FINALE.test(reply)) return reply;
-  const kept = reply.split(/\n{2,}/).map(withoutFinaleSentences).filter(Boolean);
-  return kept.length ? kept.join("\n\n") : neutralReviewThanks(review);
+/**
+ * Фактчек упёрся в ответ команды, а не в цитату, ник, дату, площадку или ссылку.
+ * Такой провал ответ заменяет, пост не пропускает.
+ */
+export function reviewFactCheckIsReplyProblem(reason: string): boolean {
+  if (/цитат\p{L}*\s+(?:перепис|не\s+(?:из|дослов)|изменен)|ник\p{L}*\s+измен|дата отзыва изменена|площадк\p{L}*\s+(?:не та|другая)|посторонняя или искажённая ссылка/iu.test(reason)) {
+    return false;
+  }
+  return /ответ\s+команд|благодар|додум|домысл|выдум|как именно|не\s+коротк|наушник|тихий вечер|финал|концовк|развязк|до\s+конца|дошл|доигра|дочита|впечатлен/iu.test(reason);
 }
 
 /**
@@ -706,7 +710,8 @@ export function reviewRetryNote(problem: string): string {
   return `${problem} В ответе команды нельзя про финал, концовку, развязку и про то, что человек дошёл, доиграл или дочитал до конца. Напиши нейтрально, строчными, отдельным абзацем: «спасибо за такие слова, ради них и делаем игру» или «спасибо, что поделились впечатлениями». Цитату и ник не меняй.`;
 }
 
-export function reviewReply(raw: string, review: ReviewSource): string {
+/** Ответ модели без цитаты, ссылки и ника. Мягкие огрехи здесь не чинятся. */
+export function extractReviewReply(raw: string, review: ReviewSource): string {
   const published = quoteToPublish(review);
   let text = raw.replace(/\r\n?/g, "\n").replace(/https?:\/\/\S+/g, "");
   text = text.replace(/«[^»]*»/gu, "");
@@ -716,7 +721,51 @@ export function reviewReply(raw: string, review: ReviewSource): string {
     .map((line) => line.replace(/[ \t]{2,}/g, " ").trim())
     .filter((line) => line && line !== review.handle && !/^фрагмент отзыва\.?$/iu.test(line))
     .join("\n\n");
-  return neutralizeReviewFinale(text.replace(/\n{3,}/g, "\n\n").trim(), review);
+  return text.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/** Ответ в уже собранном посте: абзац сразу после ника и даты. Пусто, если его нет. */
+export function publishedReviewReply(text: string, review: ReviewSource): string {
+  const published = quoteToPublish(review);
+  const day = formatReviewDay(review.date);
+  if (!published || !day) return "";
+  const attr = reviewAttr(review, day, published.excerpt);
+  const parts = text
+    .trim()
+    .split(/\n{2,}/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const idx = parts.indexOf(attr);
+  if (idx === -1 || idx + 1 >= parts.length) return "";
+  const next = parts[idx + 1];
+  if (/^https?:\/\//.test(next)) return "";
+  return next;
+}
+
+export function reviewUsesFallback(text: string, review: ReviewSource): boolean {
+  return publishedReviewReply(text, review) === REVIEW_REPLY_FALLBACK;
+}
+
+export function reviewReply(raw: string, review: ReviewSource): string {
+  const reply = extractReviewReply(raw, review);
+  return reviewReplySoftProblem(reply, review) ? REVIEW_REPLY_FALLBACK : reply;
+}
+
+/**
+ * Если черновик не проходит проверку, а пост с нейтральной благодарностью проходит —
+ * публикуем его. Оба провала остаются провалом: это уже не ответ команды.
+ */
+export function chooseReviewPost(opts: {
+  candidate: string;
+  fallback: string | null;
+  candidateProblem: string | null;
+  fallbackProblem: string | null;
+}): { text: string; replaced: boolean; problem: string | null } {
+  if (!opts.candidateProblem) return { text: opts.candidate, replaced: false, problem: null };
+  if (opts.fallback && opts.fallbackProblem == null) {
+    return { text: opts.fallback, replaced: opts.fallback !== opts.candidate, problem: null };
+  }
+  return { text: opts.candidate, replaced: false, problem: opts.fallbackProblem ?? opts.candidateProblem };
 }
 
 /** Код ставит цитату сам. Ответ модели без ёлочек и без адреса. null — собирать не из чего. */
