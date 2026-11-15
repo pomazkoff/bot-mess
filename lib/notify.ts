@@ -4,7 +4,7 @@ function botToken(): string | undefined {
   return process.env.TG_BOT_TOKEN?.trim() || undefined;
 }
 
-async function telegram(method: string, body: Record<string, unknown>): Promise<{ ok: boolean; description?: string }> {
+async function telegram(method: string, body: Record<string, unknown>): Promise<{ ok: boolean; description?: string; messageId?: number }> {
   const token = botToken();
   if (!token) return { ok: false, description: "Telegram не настроен" };
   const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
@@ -13,7 +13,10 @@ async function telegram(method: string, body: Record<string, unknown>): Promise<
     body: JSON.stringify(body),
   });
   const json: any = await res.json().catch(() => ({}));
-  if (json.ok) return { ok: true };
+  if (json.ok) {
+    const messageId = json.result?.message_id;
+    return { ok: true, messageId: typeof messageId === "number" ? messageId : undefined };
+  }
   return { ok: false, description: String(json.description ?? res.status) };
 }
 
@@ -75,6 +78,31 @@ export async function replyMessage(chatId: string, messageId: number, text: stri
     text: text.slice(0, 4000),
     reply_to_message_id: messageId,
     disable_web_page_preview: true,
+  });
+  if (!json.ok) throw new Error(json.description || "sendMessage");
+}
+
+/** Просьба прислать текст ответом. message_id нужен, чтобы узнать, какой черновик правят. */
+export async function sendEditPrompt(chatId: string, replyTo: number, html: string): Promise<number> {
+  const json = await telegram("sendMessage", {
+    chat_id: chatId,
+    text: html,
+    parse_mode: "HTML",
+    reply_to_message_id: replyTo,
+    disable_web_page_preview: true,
+    reply_markup: { force_reply: true, selective: true },
+  });
+  if (!json.ok || json.messageId == null) throw new Error(json.description || "sendMessage");
+  return json.messageId;
+}
+
+/** Новая карточка черновика с кнопками. В Threads ничего не отправляет. */
+export async function sendDraftCard(chatId: string, text: string, keyboard: TgButton[][]): Promise<void> {
+  const json = await telegram("sendMessage", {
+    chat_id: chatId,
+    text: text.slice(0, 4000),
+    disable_web_page_preview: true,
+    reply_markup: keyboard.length ? { inline_keyboard: keyboard } : undefined,
   });
   if (!json.ok) throw new Error(json.description || "sendMessage");
 }

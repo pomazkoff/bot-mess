@@ -3,18 +3,29 @@ import { postAlreadyPublished } from "./threads.js";
 import {
   chatAllowed,
   claimDecision,
+  composeEditedText,
+  draftKeyboard,
   draftTelegramText,
+  EDIT_ALREADY_PUBLISHED,
+  EDIT_ALREADY_SKIPPED,
+  editLengthReply,
+  editPromptHtml,
   historyFromDraft,
   parseDraftCallback,
   publishErrorText,
   publishedNote,
   secretMatches,
   SKIPPED_NOTE,
+  THREADS_TEXT_MAX,
   withOutcome,
+  withReplaced,
   type ClaimResult,
+  type DraftGate,
   type DraftHistoryRecord,
   type DraftMedia,
+  type PendingDraftEdit,
   type PublishDraft,
+  type TgButton,
 } from "./drafts.js";
 
 export type PublishedDraft = {
@@ -31,18 +42,27 @@ export type DraftStore = {
   markPublished(id: string, postId: string, permalink?: string): Promise<void>;
   skip(id: string): Promise<"ok" | "missing" | "published" | "skipped" | "busy">;
   recordPublication(item: DraftHistoryRecord, opts: { matchAt: string; clearMedia: boolean }): Promise<void>;
+  gate(id: string): Promise<DraftGate>;
+  updateText(id: string, text: string): Promise<"ok" | "missing" | "published" | "skipped" | "busy">;
+  rememberEdit(chatId: string, pending: PendingDraftEdit): Promise<void>;
+  findEdit(chatId: string, replyToMessageId?: number): Promise<PendingDraftEdit | null>;
+  clearEdit(chatId: string, pending: PendingDraftEdit): Promise<void>;
+};
+
+export type TelegramMessage = {
+  message_id?: number;
+  text?: string;
+  chat?: { id?: number | string };
+  reply_to_message?: { message_id?: number };
 };
 
 export type TelegramUpdate = {
   callback_query?: {
     id?: string;
     data?: string;
-    message?: {
-      message_id?: number;
-      text?: string;
-      chat?: { id?: number | string };
-    };
+    message?: TelegramMessage;
   };
+  message?: TelegramMessage;
 };
 
 export type DraftCallbackDeps = {
@@ -55,6 +75,8 @@ export type DraftCallbackDeps = {
   answer: (callbackId: string, text?: string, alert?: boolean) => Promise<boolean>;
   edit: (chatId: string, messageId: number, text: string) => Promise<void>;
   reply: (chatId: string, messageId: number, text: string) => Promise<void>;
+  allowChannel: (channelId: string) => boolean;
+  beginEdit: (chatId: string, replyTo: number, html: string) => Promise<number>;
 };
 
 function visibleText(origin: string | undefined, draft?: PublishDraft | null): string {
@@ -93,6 +115,51 @@ export async function handleDraftCallback(deps: DraftCallbackDeps): Promise<{ st
   const { action, id } = parsed;
 
   try {
+    if (action === "edit") {
+      const gate = await deps.store.gate(id);
+      if (gate === "missing") {
+        await answer("Черновик устарел", true);
+        return { status: 200 };
+      }
+      if (gate === "busy") {
+        await answer("Публикация уже идёт");
+        return { status: 200 };
+      }
+      const draft = await deps.store.get(id);
+      if (gate === "published" || draft?.status === "published") {
+        await show(withOutcome(visibleText(origin, draft), publishedNote(draft?.permalink)));
+        await answer(EDIT_ALREADY_PUBLISHED);
+        return { status: 200 };
+      }
+      if (gate === "skipped" || draft?.status === "skipped") {
+        await show(withOutcome(visibleText(origin, draft), SKIPPED_NOTE));
+        await answer(EDIT_ALREADY_SKIPPED);
+        return { status: 200 };
+      }
+      if (!draft || chatId == null || messageId == null) {
+        await answer("Черновик устарел", true);
+        return { status: 200 };
+      }
+      if (!deps.allowChannel(draft.channelId)) {
+        await answer("Недоступно", true);
+        return { status: 200 };
+      }
+      await answer("Жду текст");
+      try {
+        const promptId = await deps.beginEdit(String(chatId), messageId, editPromptHtml(draft.text));
+        await deps.store.rememberEdit(String(chatId).trim(), {
+          draftId: draft.id,
+          promptMessageId: promptId,
+          draftMessageId: messageId,
+          originText: visibleText(origin, draft),
+        });
+      } catch (error) {
+        console.error("telegram edit prompt", error);
+        await deps.reply(String(chatId), messageId, "Не удалось запросить правку. Нажми «Редактировать» ещё раз.").catch((replyError) => console.error("telegram reply", replyError));
+      }
+      return { status: 200 };
+    }
+
     if (action === "skip") {
       const result = await deps.store.skip(id);
       if (result === "missing") {
@@ -209,12 +276,117 @@ export async function publishStoredDraft(
   }
 }
 
+export type DraftMessageDeps = {
+  secretHeader: string | undefined;
+  webhookSecret: string | undefined;
+  allowedChatId: string | undefined;
+  update: TelegramUpdate;
+  store: DraftStore;
+  allowChannel: (channelId: string) => boolean;
+  sendDraft: (chatId: string, text: string, keyboard: TgButton[][]) => Promise<void>;
+  edit: (chatId: string, messageId: number, text: string) => Promise<void>;
+  reply: (chatId: string, messageId: number, text: string) => Promise<void>;
+};
+
+/** Текст от владельца. В Threads не публикует: только подменяет черновик и присылает новую карточку. */
+export async function handleDraftMessage(deps: DraftMessageDeps): Promise<{ status: number }> {
+  if (!secretMatches(deps.secretHeader, deps.webhookSecret)) return { status: 401 };
+  const message = deps.update.message;
+  if (!message || typeof message.text !== "string") return { status: 200 };
+  const chatId = message.chat?.id;
+  if (!chatAllowed(chatId, deps.allowedChatId)) return { status: 200 };
+  if (typeof message.message_id !== "number") return { status: 200 };
+  const chat = String(chatId).trim();
+  const messageId = message.message_id;
+  const replyTo = message.reply_to_message?.message_id;
+  const pending = await deps.store.findEdit(chat, typeof replyTo === "number" ? replyTo : undefined);
+  if (!pending) return { status: 200 };
+
+  const say = (text: string) => deps.reply(chat, messageId, text).catch((error) => console.error("telegram reply", error));
+  const draft = await deps.store.get(pending.draftId);
+  if (!draft) {
+    await deps.store.clearEdit(chat, pending);
+    await say("Черновик устарел");
+    return { status: 200 };
+  }
+  if (!deps.allowChannel(draft.channelId)) {
+    await deps.store.clearEdit(chat, pending);
+    await say("Недоступно");
+    return { status: 200 };
+  }
+  if (draft.status === "published") {
+    await deps.store.clearEdit(chat, pending);
+    await say(EDIT_ALREADY_PUBLISHED);
+    return { status: 200 };
+  }
+  if (draft.status === "skipped") {
+    await deps.store.clearEdit(chat, pending);
+    await say(EDIT_ALREADY_SKIPPED);
+    return { status: 200 };
+  }
+  if (!message.text.trim()) {
+    await say("Текст пустой. Пришли исправленный текст — правка ещё ждёт.");
+    return { status: 200 };
+  }
+
+  const composed = composeEditedText(draft.text, message.text, draft.studioLink);
+  if (composed.text.length > THREADS_TEXT_MAX) {
+    await say(editLengthReply(composed.text.length, composed.appendedLink));
+    return { status: 200 };
+  }
+
+  const previous = draft.text;
+  const updated = await deps.store.updateText(draft.id, composed.text);
+  if (updated === "busy") {
+    await say("Публикация уже идёт");
+    return { status: 200 };
+  }
+  if (updated === "published") {
+    await deps.store.clearEdit(chat, pending);
+    await say(EDIT_ALREADY_PUBLISHED);
+    return { status: 200 };
+  }
+  if (updated === "skipped") {
+    await deps.store.clearEdit(chat, pending);
+    await say(EDIT_ALREADY_SKIPPED);
+    return { status: 200 };
+  }
+  if (updated !== "ok") {
+    await deps.store.clearEdit(chat, pending);
+    await say("Черновик устарел");
+    return { status: 200 };
+  }
+
+  const fresh = (await deps.store.get(draft.id)) ?? { ...draft, text: composed.text };
+  try {
+    await deps.sendDraft(chat, draftTelegramText(fresh), draftKeyboard(fresh.id));
+  } catch (error) {
+    console.error("telegram draft", error);
+    const reverted = await deps.store.updateText(draft.id, previous).catch((revertError) => {
+      console.error("draft revert", revertError);
+      return "missing" as const;
+    });
+    await say(
+      reverted === "ok"
+        ? "Не удалось прислать новую версию. Текст черновика не изменён. Пришли его ещё раз."
+        : "Не удалось прислать новую версию. Текст уже сохранён — опубликовать можно кнопкой у старого сообщения.",
+    );
+    return { status: 200 };
+  }
+  await deps.edit(chat, pending.draftMessageId, withReplaced(pending.originText)).catch((error) => console.error("telegram edit", error));
+  await deps.store.clearEdit(chat, pending);
+  return { status: 200 };
+}
+
 /** Память для проверок. Замок синхронный: второй вызов в том же тике уже видит SET NX. */
 export function createMemoryDraftStore(seed?: PublishDraft): DraftStore & { drafts: Map<string, PublishDraft>; history: DraftHistoryRecord[] } {
   const drafts = new Map<string, PublishDraft>();
   const locks = new Set<string>();
   const history: DraftHistoryRecord[] = [];
+  const editByPrompt = new Map<string, PendingDraftEdit>();
+  const editLast = new Map<string, PendingDraftEdit>();
   if (seed) drafts.set(seed.id, { ...seed, status: seed.status ?? "pending" });
+  const promptKey = (chatId: string, messageId: number) => `${chatId}:${messageId}`;
 
   const snapshot = (id: string) => {
     const draft = drafts.get(id);
@@ -254,6 +426,42 @@ export function createMemoryDraftStore(seed?: PublishDraft): DraftStore & { draf
       if (locks.has(id)) return "busy";
       drafts.set(id, { ...draft, status: "skipped" });
       return "ok";
+    },
+    async gate(id) {
+      const draft = drafts.get(id);
+      if (!draft) return "missing";
+      if (draft.status === "published" || draft.status === "skipped") return draft.status;
+      if (locks.has(id)) return "busy";
+      return "pending";
+    },
+    async updateText(id, text) {
+      const draft = drafts.get(id);
+      if (!draft) return "missing";
+      if (draft.status === "published") return "published";
+      if (draft.status === "skipped") return "skipped";
+      if (locks.has(id)) return "busy";
+      const previous = draft.text;
+      drafts.set(id, { ...draft, text });
+      const row = history.find((item) => (item.channel ?? "pomazkof") === (draft.channelId || "pomazkof") && item.at === draft.at && item.text === previous && !item.postId);
+      if (row) row.text = text;
+      return "ok";
+    },
+    async rememberEdit(chatId, pending) {
+      editByPrompt.set(promptKey(chatId, pending.promptMessageId), { ...pending });
+      editLast.set(chatId, { ...pending });
+    },
+    async findEdit(chatId, replyToMessageId) {
+      if (typeof replyToMessageId === "number") {
+        const hit = editByPrompt.get(promptKey(chatId, replyToMessageId));
+        if (hit) return { ...hit };
+      }
+      const last = editLast.get(chatId);
+      return last ? { ...last } : null;
+    },
+    async clearEdit(chatId, pending) {
+      editByPrompt.delete(promptKey(chatId, pending.promptMessageId));
+      const last = editLast.get(chatId);
+      if (last?.promptMessageId === pending.promptMessageId && last.draftId === pending.draftId) editLast.delete(chatId);
     },
     async recordPublication(item, opts) {
       const index = history.findIndex((row) => row.channel === item.channel && row.at === opts.matchAt && row.text === item.text && !row.postId);
