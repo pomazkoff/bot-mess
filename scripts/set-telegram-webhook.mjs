@@ -1,5 +1,6 @@
-// Регистрирует вебхук кнопок черновика. Бот в этом репозитории только шлёт sendMessage
+// Регистрирует вебхук кнопок и правок черновика. Бот в этом репозитории только шлёт sendMessage
 // и не вызывает getUpdates: этот вызов заменяет предыдущий вебхук того же бота.
+// После деплоя скрипт нужно запустить заново: иначе Telegram не пришлёт message, и «Редактировать» не получит текст.
 //
 //   openssl rand -hex 24 | npx vercel env add TELEGRAM_WEBHOOK_SECRET production
 //   npx vercel deploy --prod
@@ -43,7 +44,7 @@ async function call(method, body) {
 const set = await call("setWebhook", {
   url,
   secret_token: secret,
-  allowed_updates: ["callback_query"],
+  allowed_updates: ["callback_query", "message"],
 });
 if (!set.ok) {
   console.error(hide(String(set.description || "setWebhook не прошёл")));

@@ -40,19 +40,30 @@ import { join } from "node:path";
 import { CHANNELS } from "./channels.js";
 import {
   DRAFT_TTL_SEC,
+  EDIT_ALREADY_PUBLISHED,
+  EDIT_ALREADY_SKIPPED,
+  EDIT_PENDING_TTL_SEC,
+  EDIT_PROMPT,
+  REPLACED_NOTE,
+  THREADS_TEXT_MAX,
   chatAllowed,
   claimDecision,
+  composeEditedText,
   draftKeyboard,
   draftTelegramText,
+  editLengthReply,
+  editPromptHtml,
   historyFromDraft,
   newDraftId,
   parseDraftCallback,
   publishErrorText,
   secretMatches,
   withOutcome,
+  withReplaced,
   type PublishDraft,
+  type TgButton,
 } from "./drafts.js";
-import { createMemoryDraftStore, handleDraftCallback, publishStoredDraft } from "./draftReview.js";
+import { createMemoryDraftStore, handleDraftCallback, handleDraftMessage, publishStoredDraft, type DraftStore } from "./draftReview.js";
 import { pickStudioSlot, studioFactIds, studioProblem } from "./studio.js";
 import {
   EDITORIAL_SKIP_REASON,
@@ -1039,15 +1050,46 @@ assert.equal(DRAFT_TTL_SEC, 7 * 24 * 60 * 60);
 const freshId = newDraftId();
 assert.equal(parseDraftCallback(`pub:${freshId}`)?.action, "pub");
 assert.equal(parseDraftCallback(`skip:${freshId}`)?.id, freshId);
+assert.equal(parseDraftCallback(`edit:${freshId}`)?.action, "edit");
+assert.equal(parseDraftCallback(`edit:${freshId}`)?.id, freshId);
 assert.equal(parseDraftCallback("pub:ZZZZZZZZZZZZZZZZ"), null);
 assert.equal(parseDraftCallback("pub:../../etc/passwd"), null);
+assert.equal(parseDraftCallback("edit:short"), null);
 assert.equal(parseDraftCallback("drop:aaaaaaaaaaaaaaaa"), null);
 const keys = draftKeyboard(freshId);
-assert.deepEqual(keys.map((row) => row.map((button) => button.text)), [["Опубликовать", "Пропустить"]]);
+assert.deepEqual(keys.map((row) => row.map((button) => button.text)), [["Опубликовать", "Пропустить", "Редактировать"]]);
 assert.equal(keys[0][0].callback_data, `pub:${freshId}`);
 assert.equal(keys[0][1].callback_data, `skip:${freshId}`);
-assert.ok(Buffer.byteLength(keys[0][0].callback_data) <= 64);
-assert.ok(Buffer.byteLength(keys[0][1].callback_data) <= 64);
+assert.equal(keys[0][2].callback_data, `edit:${freshId}`);
+assert.ok(keys[0].every((button) => Buffer.byteLength(button.callback_data) <= 64));
+assert.equal(EDIT_PENDING_TTL_SEC, 60 * 60);
+assert.equal(THREADS_TEXT_MAX, 500);
+const studioLink = "https://mazkof.games/#oloid";
+assert.deepEqual(composeEditedText(`было\n\n${studioLink}`, "новый текст", studioLink), {
+  text: `новый текст\n\n${studioLink}`,
+  appendedLink: true,
+});
+assert.deepEqual(composeEditedText(`было\n\n${studioLink}`, "новый  ", studioLink), {
+  text: `новый\n\n${studioLink}`,
+  appendedLink: true,
+});
+assert.deepEqual(composeEditedText(`было\n\n${studioLink}`, `смотри ${studioLink} ещё`, studioLink), {
+  text: `смотри ${studioLink} ещё`,
+  appendedLink: false,
+});
+assert.deepEqual(composeEditedText("без ссылки", "  как есть  ", undefined), { text: "  как есть  ", appendedLink: false });
+assert.deepEqual(composeEditedText("без ссылки", "новый", studioLink), { text: "новый", appendedLink: false });
+assert.ok(editLengthReply(501, false).includes("501 символ,"));
+assert.ok(editLengthReply(502, false).includes("502 символа"));
+assert.equal(editLengthReply(512, false).includes("вместе со ссылкой"), false);
+assert.ok(editLengthReply(511, true).includes("511 символов"));
+assert.ok(editLengthReply(511, true).includes("вместе со ссылкой"));
+const promptHtml = editPromptHtml("a < b & c\nвторая");
+assert.ok(promptHtml.startsWith(EDIT_PROMPT));
+assert.ok(promptHtml.includes("<pre>a &lt; b &amp; c\nвторая</pre>"));
+const replacedTwice = withReplaced("черновик");
+assert.equal(withReplaced(replacedTwice), replacedTwice);
+assert.ok(replacedTwice.endsWith(REPLACED_NOTE));
 assert.equal(secretMatches("sekret", "sekret"), true);
 assert.equal(secretMatches("sekret", "secret"), false);
 assert.equal(secretMatches("a", "ab"), false);
@@ -1097,9 +1139,11 @@ async function press(
     webhookSecret?: string;
     chat?: number | string;
     allowedChat?: string;
-    publish?: () => Promise<{ postId: string; permalink?: string; mediaUrl?: string; clearMedia: boolean }>;
+    publish?: (draft: PublishDraft) => Promise<{ postId: string; permalink?: string; mediaUrl?: string; clearMedia: boolean }>;
     answerOk?: boolean;
     store?: ReturnType<typeof createMemoryDraftStore>;
+    allowChannel?: (channelId: string) => boolean;
+    beginEdit?: (chatId: string, replyTo: number, html: string) => Promise<number>;
   },
 ): Promise<PressLog & { status: number; store: ReturnType<typeof createMemoryDraftStore> }> {
   const draft = opts?.draft === undefined ? sampleDraft : opts.draft;
@@ -1135,6 +1179,8 @@ async function press(
       reply: async (_chat, _message, text) => {
         replies.push(text);
       },
+      allowChannel: opts?.allowChannel ?? (() => true),
+      beginEdit: opts?.beginEdit ?? (async () => 100),
     })
   ).status;
   return { status, store, answers, edits, replies, publishes };
@@ -1308,6 +1354,332 @@ await assert.rejects(
   /кнопки/,
 );
 
+const linkInPost = "https://mazkof.games/#oloid";
+type CardLog = { text: string; keys: string[] };
+async function correct(
+  store: DraftStore,
+  text: string,
+  opts?: { chat?: number; secret?: string; webhookSecret?: string; replyTo?: number; allow?: (channelId: string) => boolean; failSend?: boolean },
+): Promise<{ status: number; replies: string[]; cards: CardLog[]; edits: string[] }> {
+  const replies: string[] = [];
+  const cards: CardLog[] = [];
+  const edits: string[] = [];
+  const status = (
+    await handleDraftMessage({
+      secretHeader: opts && "secret" in opts ? opts.secret : "sekret",
+      webhookSecret: opts && "webhookSecret" in opts ? opts.webhookSecret : "sekret",
+      allowedChatId: "42",
+      update: {
+        message: {
+          message_id: 80,
+          text,
+          chat: { id: opts?.chat ?? 42 },
+          reply_to_message: typeof opts?.replyTo === "number" ? { message_id: opts.replyTo } : undefined,
+        },
+      },
+      store,
+      allowChannel: opts?.allow ?? ((channelId) => channelId === "pomazkof"),
+      sendDraft: async (_chat, card, keyboard: TgButton[][]) => {
+        if (opts?.failSend) throw new Error("telegram down");
+        cards.push({ text: card, keys: keyboard.flat().map((button) => button.callback_data) });
+      },
+      edit: async (_chat, _message, next) => {
+        edits.push(next);
+      },
+      reply: async (_chat, _message, next) => {
+        replies.push(next);
+      },
+    })
+  ).status;
+  return { status, replies, cards, edits };
+}
+
+const editStore = createMemoryDraftStore(structuredClone(sampleDraft));
+editStore.history.push({
+  channel: "pomazkof",
+  project: "studio",
+  rubric: "how",
+  text: sampleDraft.text,
+  at: sampleDraft.at,
+  media: sampleDraft.media?.url,
+  studioSubject: "oloid",
+  studioFactId: "oloid-hand",
+});
+let beganEdit = false;
+const asked = await press(`edit:${sampleDraft.id}`, {
+  store: editStore,
+  beginEdit: async (_chat, replyTo, html) => {
+    beganEdit = true;
+    assert.equal(replyTo, 7);
+    assert.ok(html.startsWith(EDIT_PROMPT));
+    assert.ok(html.includes(`<pre>${sampleDraft.text}</pre>`));
+    return 55;
+  },
+});
+assert.equal(beganEdit, true);
+assert.equal(asked.publishes, 0);
+assert.equal(asked.answers.at(-1)?.text, "Жду текст");
+assert.equal((await editStore.findEdit("42", 55))?.draftId, sampleDraft.id);
+const ignored = await correct(editStore, "не про это", { replyTo: 3 });
+assert.equal(ignored.cards.length, 1);
+assert.equal(editStore.drafts.get(sampleDraft.id)?.text, "не про это");
+editStore.drafts.set(sampleDraft.id, structuredClone(sampleDraft));
+editStore.history[0].text = sampleDraft.text;
+await editStore.rememberEdit("42", {
+  draftId: sampleDraft.id,
+  promptMessageId: 55,
+  draftMessageId: 7,
+  originText: "карточка один",
+});
+await editStore.rememberEdit("42", {
+  draftId: sampleDraft.id,
+  promptMessageId: 77,
+  draftMessageId: 7,
+  originText: "карточка два",
+});
+const exact = "это вайбкодинг, и Cursor тоже.\n\nбез фильтра";
+const fixed = await correct(editStore, exact, { replyTo: 55 });
+assert.equal(fixed.status, 200);
+assert.equal(editStore.drafts.get(sampleDraft.id)?.text, exact);
+assert.equal(editStore.drafts.get(sampleDraft.id)?.studioLink, sampleDraft.studioLink);
+assert.equal(editStore.drafts.get(sampleDraft.id)?.media?.url, sampleDraft.media?.url);
+assert.equal(editStore.drafts.get(sampleDraft.id)?.projectId, "studio");
+assert.equal(editStore.history[0]?.text, exact);
+assert.equal(editStore.history.length, 1);
+assert.ok(fixed.cards[0]?.text.startsWith("черновик @pomazkof"));
+assert.ok(fixed.cards[0]?.text.includes(exact));
+assert.ok(fixed.cards[0]?.text.includes(`картинка: ${sampleDraft.media?.url}`));
+assert.ok(fixed.cards[0]?.text.endsWith(`ссылка: ${sampleDraft.studioLink}`));
+assert.deepEqual(fixed.cards[0]?.keys, [`pub:${sampleDraft.id}`, `skip:${sampleDraft.id}`, `edit:${sampleDraft.id}`]);
+assert.ok(fixed.edits[0]?.includes("карточка один"));
+assert.ok(fixed.edits[0]?.endsWith(REPLACED_NOTE));
+assert.equal((await editStore.findEdit("42", 55))?.originText, "карточка два");
+assert.equal((await editStore.findEdit("42"))?.promptMessageId, 77);
+const againText = "вторая версия";
+const again = await correct(editStore, againText);
+assert.equal(editStore.drafts.get(sampleDraft.id)?.text, againText);
+assert.ok(again.edits[0]?.includes("карточка два"));
+assert.equal(await editStore.findEdit("42"), null);
+let publishedText = "";
+let publishCalls = 0;
+const postedEdit = await press(`pub:${sampleDraft.id}`, {
+  store: editStore,
+  publish: async (draft) => {
+    publishCalls += 1;
+    publishedText = draft.text;
+    return { postId: "post-e", permalink: "https://www.threads.net/t/e", mediaUrl: draft.media?.url, clearMedia: false };
+  },
+});
+const postedEditAgain = await press(`pub:${sampleDraft.id}`, {
+  store: editStore,
+  publish: async () => {
+    publishCalls += 1;
+    return { postId: "post-e2", clearMedia: false };
+  },
+});
+assert.equal(publishCalls, 1);
+assert.equal(publishedText, againText);
+assert.equal(postedEdit.answers.at(-1)?.text, "Опубликовано");
+assert.equal(postedEditAgain.publishes, 0);
+assert.equal(postedEditAgain.answers.at(-1)?.text, "Уже опубликовано");
+assert.equal(editStore.history.length, 1);
+assert.equal(editStore.history[0]?.postId, "post-e");
+assert.equal(editStore.history[0]?.text, againText);
+let editAfterPublish = false;
+const publishedButton = await press(`edit:${sampleDraft.id}`, {
+  store: editStore,
+  beginEdit: async () => {
+    editAfterPublish = true;
+    return 8;
+  },
+});
+assert.equal(editAfterPublish, false);
+assert.equal(publishedButton.publishes, 0);
+assert.equal(publishedButton.answers.at(-1)?.text, EDIT_ALREADY_PUBLISHED);
+await editStore.rememberEdit("42", { draftId: sampleDraft.id, promptMessageId: 90, draftMessageId: 7, originText: "уже вышло" });
+const lateText = await correct(editStore, "после публикации", { replyTo: 90 });
+assert.equal(lateText.replies[0], EDIT_ALREADY_PUBLISHED);
+assert.equal(lateText.cards.length, 0);
+assert.equal(editStore.drafts.get(sampleDraft.id)?.text, againText);
+assert.equal(await editStore.findEdit("42"), null);
+
+const skipEditStore = createMemoryDraftStore(structuredClone(sampleDraft));
+await skipEditStore.rememberEdit("42", { draftId: sampleDraft.id, promptMessageId: 55, draftMessageId: 7, originText: draftTelegramText(sampleDraft) });
+await skipEditStore.skip(sampleDraft.id);
+const afterSkip = await correct(skipEditStore, "уже не надо", { replyTo: 55 });
+assert.equal(afterSkip.replies[0], EDIT_ALREADY_SKIPPED);
+assert.equal(skipEditStore.drafts.get(sampleDraft.id)?.text, sampleDraft.text);
+assert.equal(await skipEditStore.findEdit("42"), null);
+let editAfterSkip = false;
+const skippedButton = await press(`edit:${sampleDraft.id}`, {
+  store: skipEditStore,
+  beginEdit: async () => {
+    editAfterSkip = true;
+    return 9;
+  },
+});
+assert.equal(editAfterSkip, false);
+assert.equal(skippedButton.answers.at(-1)?.text, EDIT_ALREADY_SKIPPED);
+assert.equal(skippedButton.publishes, 0);
+
+const longStore = createMemoryDraftStore(structuredClone(sampleDraft));
+await longStore.rememberEdit("42", { draftId: sampleDraft.id, promptMessageId: 55, draftMessageId: 7, originText: "карточка" });
+const tooLong = "я".repeat(501);
+const rejected = await correct(longStore, tooLong, { replyTo: 55 });
+assert.ok(rejected.replies[0]?.includes("501"));
+assert.ok(rejected.replies[0]?.includes(String(THREADS_TEXT_MAX)));
+assert.equal(rejected.replies[0]?.includes("вместе со ссылкой"), false);
+assert.equal(rejected.cards.length, 0);
+assert.equal(longStore.drafts.get(sampleDraft.id)?.text, sampleDraft.text);
+assert.equal((await longStore.findEdit("42", 55))?.draftId, sampleDraft.id);
+const blank = await correct(longStore, "   \n", { replyTo: 55 });
+assert.ok(blank.replies[0]?.includes("пустой"));
+assert.equal(longStore.drafts.get(sampleDraft.id)?.text, sampleDraft.text);
+const accepted = await correct(longStore, "короче", { replyTo: 55 });
+assert.equal(longStore.drafts.get(sampleDraft.id)?.text, "короче");
+assert.equal(accepted.cards.length, 1);
+
+const linked: PublishDraft = { ...sampleDraft, text: `стол едет рывками.\n\n${linkInPost}` };
+const linkedStore = createMemoryDraftStore(linked);
+await linkedStore.rememberEdit("42", { draftId: linked.id, promptMessageId: 55, draftMessageId: 7, originText: "со ссылкой" });
+const overflowBody = "я".repeat(THREADS_TEXT_MAX - linkInPost.length - 2 + 1);
+const overflow = await correct(linkedStore, overflowBody, { replyTo: 55 });
+const overflowCount = overflowBody.length + 2 + linkInPost.length;
+assert.ok(overflow.replies[0]?.includes(String(overflowCount)));
+assert.ok(overflow.replies[0]?.includes("вместе со ссылкой"));
+assert.equal(linkedStore.drafts.get(linked.id)?.text, linked.text);
+const relinked = await correct(linkedStore, "новый абзац", { replyTo: 55 });
+assert.equal(linkedStore.drafts.get(linked.id)?.text, `новый абзац\n\n${linkInPost}`);
+assert.equal(linkedStore.drafts.get(linked.id)?.studioLink, linkInPost);
+assert.ok(relinked.cards[0]?.text.includes(`новый абзац\n\n${linkInPost}`));
+assert.ok(relinked.cards[0]?.text.endsWith(`ссылка: ${linkInPost}`));
+
+const quietStore = createMemoryDraftStore({ ...sampleDraft, text: "без ссылки", studioLink: undefined });
+await quietStore.rememberEdit("42", { draftId: sampleDraft.id, promptMessageId: 55, draftMessageId: 7, originText: "тихо" });
+await correct(quietStore, "  как есть  ", { replyTo: 55 });
+assert.equal(quietStore.drafts.get(sampleDraft.id)?.text, "  как есть  ");
+assert.equal(quietStore.drafts.get(sampleDraft.id)?.studioLink, undefined);
+
+const failStore = createMemoryDraftStore(structuredClone(sampleDraft));
+failStore.history.push({ channel: "pomazkof", project: "studio", rubric: "how", text: sampleDraft.text, at: sampleDraft.at });
+await failStore.rememberEdit("42", { draftId: sampleDraft.id, promptMessageId: 55, draftMessageId: 7, originText: "карточка" });
+const failedSend = await correct(failStore, "не дошло", { replyTo: 55, failSend: true });
+assert.equal(failStore.drafts.get(sampleDraft.id)?.text, sampleDraft.text);
+assert.equal(failStore.history[0]?.text, sampleDraft.text);
+assert.ok(failedSend.replies[0]?.includes("не изменён"));
+assert.equal((await failStore.findEdit("42", 55))?.draftId, sampleDraft.id);
+
+const foreignEdit = await correct(longStore, "чужой", { chat: 99, replyTo: 55 });
+assert.equal(foreignEdit.status, 200);
+assert.equal(foreignEdit.replies.length, 0);
+assert.equal(foreignEdit.cards.length, 0);
+const lockedOut = await correct(longStore, "без секрета", { secret: "no", replyTo: 55 });
+assert.equal(lockedOut.status, 401);
+assert.equal(lockedOut.replies.length, 0);
+const noPending = createMemoryDraftStore(structuredClone(sampleDraft));
+const stray = await correct(noPending, "просто сообщение");
+assert.equal(stray.replies.length, 0);
+assert.equal(stray.cards.length, 0);
+assert.equal(noPending.drafts.get(sampleDraft.id)?.text, sampleDraft.text);
+const photo = await handleDraftMessage({
+  secretHeader: "sekret",
+  webhookSecret: "sekret",
+  allowedChatId: "42",
+  update: { message: { message_id: 81, chat: { id: 42 } } },
+  store: longStore,
+  allowChannel: () => true,
+  sendDraft: async () => {
+    throw new Error("не должны слать карточку");
+  },
+  edit: async () => {
+    throw new Error("не должны править сообщение");
+  },
+  reply: async () => {
+    throw new Error("не должны отвечать");
+  },
+});
+assert.equal(photo.status, 200);
+
+const heldStore = createMemoryDraftStore(structuredClone(sampleDraft));
+await heldStore.rememberEdit("42", { draftId: sampleDraft.id, promptMessageId: 55, draftMessageId: 7, originText: "карточка" });
+const held = await heldStore.claim(sampleDraft.id);
+assert.equal(held.kind, "go");
+const whileBusy = await correct(heldStore, "во время публикации", { replyTo: 55 });
+assert.equal(whileBusy.replies[0], "Публикация уже идёт");
+assert.equal(heldStore.drafts.get(sampleDraft.id)?.text, sampleDraft.text);
+assert.equal((await heldStore.findEdit("42", 55))?.draftId, sampleDraft.id);
+await heldStore.release(sampleDraft.id);
+
+let editWhileHeld = false;
+let holdEntered = 0;
+let releaseHold!: () => void;
+const holdGate = new Promise<void>((resolve) => {
+  releaseHold = resolve;
+});
+const holdStore = createMemoryDraftStore(structuredClone(sampleDraft));
+const holding = press(`pub:${sampleDraft.id}`, {
+  store: holdStore,
+  publish: async () => {
+    holdEntered += 1;
+    await holdGate;
+    return { postId: "post-hold", clearMedia: false };
+  },
+});
+const editHeld = await press(`edit:${sampleDraft.id}`, {
+  store: holdStore,
+  beginEdit: async () => {
+    editWhileHeld = true;
+    return 4;
+  },
+});
+assert.equal(holdEntered, 1);
+assert.equal(editWhileHeld, false);
+assert.equal(editHeld.answers.at(-1)?.text, "Публикация уже идёт");
+assert.equal(editHeld.publishes, 0);
+releaseHold();
+await holding;
+
+const oloidDraft: PublishDraft = { ...sampleDraft, channelId: "oloid" };
+const oloidStore = createMemoryDraftStore(oloidDraft);
+let oloidBegan = false;
+const oloidEdit = await press(`edit:${oloidDraft.id}`, {
+  draft: oloidDraft,
+  store: oloidStore,
+  allowChannel: (channelId) => channelId === "pomazkof",
+  beginEdit: async () => {
+    oloidBegan = true;
+    return 6;
+  },
+});
+assert.equal(oloidBegan, false);
+assert.equal(oloidEdit.publishes, 0);
+assert.equal(oloidEdit.answers.at(-1)?.text, "Недоступно");
+await oloidStore.rememberEdit("42", { draftId: oloidDraft.id, promptMessageId: 55, draftMessageId: 7, originText: "олоид" });
+const oloidMessage = await correct(oloidStore, "правка олоида", { replyTo: 55, allow: (channelId) => channelId === "pomazkof" });
+assert.equal(oloidMessage.replies[0], "Недоступно");
+assert.equal(oloidStore.drafts.get(oloidDraft.id)?.text, oloidDraft.text);
+assert.equal(oloidMessage.cards.length, 0);
+
+let promptFailed = false;
+const promptStore = createMemoryDraftStore(structuredClone(sampleDraft));
+const promptBoom = await press(`edit:${sampleDraft.id}`, {
+  store: promptStore,
+  beginEdit: async () => {
+    promptFailed = true;
+    throw new Error("telegram down");
+  },
+});
+assert.equal(promptFailed, true);
+assert.equal(promptBoom.answers.at(-1)?.text, "Жду текст");
+assert.ok(promptBoom.replies[0]?.includes("Не удалось запросить правку"));
+assert.equal(await promptStore.findEdit("42"), null);
+assert.equal(promptStore.drafts.get(sampleDraft.id)?.text, sampleDraft.text);
+
+const reviewSrc = readFileSync(new URL("./draftReview.ts", import.meta.url), "utf8");
+assert.equal(reviewSrc.includes("studioProblem"), false);
+assert.equal(reviewSrc.includes("ruleCheck"), false);
+assert.equal(reviewSrc.includes("factCheck"), false);
+
 const telegramSrc = readFileSync(new URL("../api/telegram.ts", import.meta.url), "utf8");
 assert.ok(telegramSrc.includes("x-telegram-bot-api-secret-token"));
 assert.ok(telegramSrc.includes("TELEGRAM_WEBHOOK_SECRET"));
@@ -1315,16 +1687,21 @@ assert.ok(telegramSrc.includes("TG_CHAT_ID"));
 assert.ok(telegramSrc.includes("publishPost"));
 assert.equal(telegramSrc.includes("THREADS_ACCESS_TOKEN_OLOID"), false);
 assert.ok(telegramSrc.includes("editMessageClearButtons"));
+assert.ok(telegramSrc.includes("handleDraftMessage"));
+assert.ok(telegramSrc.includes("sendEditPrompt"));
+assert.ok(telegramSrc.includes("draftOnly"));
 assert.equal(previewSrc.includes("savePublishDraft"), false);
 assert.equal(previewSrc.includes("draftKeyboard"), false);
 const storeSrc = readFileSync(new URL("./store.ts", import.meta.url), "utf8");
 assert.ok(storeSrc.includes("claimDecision"));
 assert.ok(storeSrc.includes("threads:draft:"));
+assert.ok(storeSrc.includes("threads:draft_edit:"));
+assert.ok(storeSrc.includes("threads:draft_edit_last:"));
 assert.ok(storeSrc.includes("NX: true"));
 const webhookSrc = readFileSync(new URL("../scripts/set-telegram-webhook.mjs", import.meta.url), "utf8");
 assert.ok(webhookSrc.includes("setWebhook"));
 assert.ok(webhookSrc.includes("secret_token"));
-assert.ok(webhookSrc.includes('allowed_updates: ["callback_query"]'));
+assert.ok(webhookSrc.includes('allowed_updates: ["callback_query", "message"]'));
 assert.equal(/getUpdates\s*\(/.test(webhookSrc), false);
 const vercel = JSON.parse(readFileSync(new URL("../vercel.json", import.meta.url), "utf8")) as {
   crons: { path: string; schedule: string }[];

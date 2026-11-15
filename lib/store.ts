@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { createClient } from "redis";
 import type { Channel } from "./channels.js";
-import { claimDecision, DRAFT_ID_RE, DRAFT_LOCK_SEC, DRAFT_TTL_SEC, type ClaimResult, type PublishDraft } from "./drafts.js";
+import { claimDecision, DRAFT_ID_RE, DRAFT_LOCK_SEC, DRAFT_TTL_SEC, EDIT_PENDING_TTL_SEC, type ClaimResult, type DraftGate, type PendingDraftEdit, type PublishDraft } from "./drafts.js";
 
 // Redis из Vercel Marketplace (Redis или Upstash) — оба отдают REDIS_URL.
 // Подключение ленивое: без Redis функция не падает при загрузке, а внятно сообщает об ошибке.
@@ -359,6 +359,92 @@ export async function markDraftPublished(id: string, postId: string, permalink?:
   await c.del(draftLockKey(id));
 }
 
+export async function gatePublishDraft(id: string): Promise<DraftGate> {
+  if (!DRAFT_ID_RE.test(id)) return "missing";
+  const draft = await readDraft(id);
+  if (!draft) return "missing";
+  if (draft.status === "published" || draft.status === "skipped") return draft.status;
+  const lock = await (await db()).get(draftLockKey(id));
+  if (lock) return "busy";
+  return "pending";
+}
+
+/** Меняет только текст. Картинка, ссылка и остальные поля остаются. Замок публикации не даёт переписать текст посреди поста. */
+export async function updatePublishDraftText(id: string, text: string): Promise<"ok" | "missing" | "published" | "skipped" | "busy"> {
+  if (!DRAFT_ID_RE.test(id)) return "missing";
+  const c = await db();
+  const first = await readDraft(id);
+  if (!first) return "missing";
+  if (first.status === "published") return "published";
+  if (first.status === "skipped") return "skipped";
+  const locked = await c.set(draftLockKey(id), "edit", { NX: true, EX: DRAFT_LOCK_SEC });
+  if (locked !== "OK") {
+    const again = await readDraft(id);
+    if (!again) return "missing";
+    if (again.status === "published") return "published";
+    if (again.status === "skipped") return "skipped";
+    return "busy";
+  }
+  try {
+    const fresh = await readDraft(id);
+    if (!fresh) return "missing";
+    if (fresh.status === "published" || fresh.status === "skipped") return fresh.status;
+    const previous = fresh.text;
+    await replaceDraft(id, { ...fresh, text });
+    await rewriteDraftHistoryText(fresh.channelId, fresh.at, previous, text).catch((error) => console.error("history", error));
+    return "ok";
+  } finally {
+    await c.del(draftLockKey(id));
+  }
+}
+
+const editPromptKey = (chatId: string, messageId: number) => `threads:draft_edit:${chatId}:${messageId}`;
+const editLastKey = (chatId: string) => `threads:draft_edit_last:${chatId}`;
+
+function parsePending(raw: string | null): PendingDraftEdit | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as PendingDraftEdit;
+    if (!value || !DRAFT_ID_RE.test(value.draftId)) return null;
+    if (!Number.isInteger(value.promptMessageId) || !Number.isInteger(value.draftMessageId)) return null;
+    if (typeof value.originText !== "string") return null;
+    return {
+      draftId: value.draftId,
+      promptMessageId: value.promptMessageId,
+      draftMessageId: value.draftMessageId,
+      originText: value.originText,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function rememberDraftEdit(chatId: string, pending: PendingDraftEdit): Promise<void> {
+  if (!DRAFT_ID_RE.test(pending.draftId)) throw new Error("плохой id черновика");
+  const c = await db();
+  const payload = JSON.stringify(pending);
+  await Promise.all([
+    c.set(editPromptKey(chatId, pending.promptMessageId), payload, { EX: EDIT_PENDING_TTL_SEC }),
+    c.set(editLastKey(chatId), payload, { EX: EDIT_PENDING_TTL_SEC }),
+  ]);
+}
+
+export async function findDraftEdit(chatId: string, replyToMessageId?: number): Promise<PendingDraftEdit | null> {
+  const c = await db();
+  if (typeof replyToMessageId === "number") {
+    const hit = parsePending(await c.get(editPromptKey(chatId, replyToMessageId)));
+    if (hit) return hit;
+  }
+  return parsePending(await c.get(editLastKey(chatId)));
+}
+
+export async function clearDraftEdit(chatId: string, pending: PendingDraftEdit): Promise<void> {
+  const c = await db();
+  await c.del(editPromptKey(chatId, pending.promptMessageId));
+  const last = parsePending(await c.get(editLastKey(chatId)));
+  if (last?.promptMessageId === pending.promptMessageId && last.draftId === pending.draftId) await c.del(editLastKey(chatId));
+}
+
 export async function skipPublishDraft(id: string): Promise<"ok" | "missing" | "published" | "skipped" | "busy"> {
   if (!DRAFT_ID_RE.test(id)) return "missing";
   const c = await db();
@@ -382,6 +468,30 @@ export async function skipPublishDraft(id: string): Promise<"ok" | "missing" | "
     return "ok";
   } finally {
     await c.del(draftLockKey(id));
+  }
+}
+
+/** Та же запись истории, что крон положил при черновике: текст меняется, слот остаётся один. */
+async function rewriteDraftHistoryText(channel: string, at: string, from: string, to: string, attempt = 0): Promise<void> {
+  if (from === to) return;
+  const c = await db();
+  const rows = await c.lRange(K.history, 0, 199);
+  for (let i = 0; i < rows.length; i++) {
+    let parsed: HistoryItem;
+    try {
+      parsed = JSON.parse(rows[i]) as HistoryItem;
+    } catch {
+      continue;
+    }
+    if ((parsed.channel ?? "pomazkof") !== (channel || "pomazkof")) continue;
+    if (parsed.at !== at || parsed.text !== from || parsed.postId) continue;
+    const current = await c.lIndex(K.history, i);
+    if (current !== rows[i]) {
+      if (attempt === 0) return rewriteDraftHistoryText(channel, at, from, to, 1);
+      continue;
+    }
+    await c.lSet(K.history, i, JSON.stringify({ ...parsed, text: to }));
+    return;
   }
 }
 
