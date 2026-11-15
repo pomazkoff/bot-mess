@@ -46,6 +46,7 @@ import {
   isOloidEditorialRubric,
   pickEditorial,
   reviewReplyBudget,
+  reviewRetryNote,
   reviewSimilarityText,
   type EditorialGate,
 } from "./oloidEditorial.js";
@@ -803,7 +804,7 @@ export async function makeDraft(opts: {
       }
     }
     if (problem) {
-      feedback = problem;
+      feedback = editorial?.kind === "review" ? reviewRetryNote(problem) : problem;
       hints.promoRejected.push(candidate);
       hints.vkRejected.push(candidate);
       rejected.push(`#${i + 1}${isPromo && promoAngle ? ` [${promoAngle.label}]` : vkAngle ? ` [${vkAngle.label}]` : ""} ❌ ${problem}\n${candidate}`);
