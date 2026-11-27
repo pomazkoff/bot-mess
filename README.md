@@ -58,6 +58,21 @@ curl -H "Authorization: Bearer $CRON_SECRET" "https://<проект>.vercel.app/
 Посмотри 5–10 сгенерированных текстов. Если тон не тот, правь `voice`, `facts` и `rubrics` в `lib/projects.ts`.
 Потом запусти без `dry=1`.
 
+## Репост в другой аккаунт
+Ручной вызов, не крон. Тот же секрет, что у `/api/cron`. Канал `from` отдаёт пост, канал `to` репостит его через `POST /v1.0/{media_id}/repost`. Токену `to` нужны права `threads_basic` и `threads_content_publish`. Пауза канала (`paused` у @pomazkof) и общий `PAUSED` этот вызов не останавливают.
+
+`dry=1` только находит пост и ничего не пишет в Redis. Без `id` берётся самый свежий свой пост `from`, кроме репостов (`REPOST_FACADE`). Ответы Threads отдаёт отдельным списком, в `/me/threads` их нет. Повтор того же поста тем же каналом возвращает `{ "skipped": "already reposted" }`. В ответе `text` — начало текста, до 140 символов. В `dry=1` поле `id` — пост источника. После репоста `id` — id нового репоста, `mediaId` — пост источника.
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  "https://<проект>.vercel.app/api/repost?from=pomazkof&to=oloid&dry=1"
+
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  "https://<проект>.vercel.app/api/repost?from=pomazkof&to=oloid"
+```
+
+Конкретный пост: добавь `&id=<media id>`.
+
 ## Управление
 - `PAUSED=1` — стоп-кран: бот ничего не публикует.
 - `DRY_RUN=1` — бот генерирует посты, но не публикует их.
