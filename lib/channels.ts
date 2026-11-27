@@ -14,6 +14,7 @@ export type Channel = {
 };
 
 export const CHANNELS: Channel[] = [
+  // На паузе с 27.11.2026 по просьбе Ильи. Для возобновления убрать paused.
   // Личный блог Ильи обо всех проектах Mazkof Games. Слоты 11:00, 16:00 и 21:00 МСК.
   // draftOnly: крон шлёт черновик в Telegram («черновик @pomazkof») с кнопками «Опубликовать», «Пропустить» и «Редактировать».
   // Сам крон в Threads не публикует. Токен — THREADS_ACCESS_TOKEN.
@@ -24,6 +25,7 @@ export const CHANNELS: Channel[] = [
     name: "@pomazkof",
     tokenEnv: "THREADS_ACCESS_TOKEN",
     projects: ["studio"],
+    paused: true,
     draftOnly: true,
     voiceNote: "Личный аккаунт Ильи. Пиши от первого лица («я делаю», «мы в Mazkof Games»), не от лица одной игры.",
   },

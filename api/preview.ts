@@ -46,6 +46,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.json({ threads: j.username ? { username: j.username, id: j.id } : { error: j.error?.message ?? r.status } });
   }
 
+  // Пауза канала: не генерируем пост и не шлём его в Telegram. Крон отвечает так же, до makeDraft.
+  if (channel.paused) return res.json({ skipped: `${channel.id} paused` });
+
   try {
     // Превью работает и без Redis, но сообщает, видна ли база (поле redis)
     let redis = "ok";
