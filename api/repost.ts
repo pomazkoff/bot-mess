@@ -5,7 +5,7 @@ import {
   normalizeThread,
   pickLatestPost,
   repostRedisKey,
-  textStart,
+  shownPostText,
   threadsFromList,
   type ThreadListItem,
 } from "../lib/repost.js";
@@ -93,12 +93,12 @@ async function repostMedia(token: string, mediaId: string): Promise<string> {
   return id;
 }
 
-function postView(post: ThreadListItem) {
+function postView(post: ThreadListItem, full = false) {
   return {
     id: post.id,
     permalink: post.permalink ?? null,
     timestamp: post.timestamp ?? null,
-    text: textStart(post.text),
+    text: shownPostText(post.text, full),
   };
 }
 
@@ -125,7 +125,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const sourceToken = await ensureFreshToken(from);
     const post = rawId ? await postById(sourceToken, rawId) : await latestOwnPost(sourceToken);
     if (!post) return res.status(404).json({ error: "у канала нет поста", from: from.id });
-    const view = postView(post);
+    const full = req.query.dry === "1" && req.query.full === "1";
+    const view = postView(post, full);
     if (req.query.dry === "1") return res.json({ dry: true, from: from.id, to: to.id, ...view });
 
     const key = repostRedisKey(to.id, post.id);

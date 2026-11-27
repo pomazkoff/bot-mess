@@ -48,6 +48,9 @@
     },
     "api/repost.ts": {
       "maxDuration": 60
+    },
+    "api/post.ts": {
+      "maxDuration": 60
     }
   }
 }

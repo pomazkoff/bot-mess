@@ -4,11 +4,14 @@
 
 import assert from "node:assert/strict";
 import { OLOID_DEV_NUMBER_FACTS, OLOID_DEV_NUMBERS_RUBRIC, devNumberProblem, numberTokens } from "./devFacts.js";
-import { appStoreCodeProblem, appStoreMomentProblem, appStorePriceProblem, lowercaseSentenceStarts, provocationNumberProblem, repeatedEnding, ruleCheck, steamWishlistProblem } from "./generate.js";
+import { appStoreCodeProblem, appStoreMomentProblem, appStorePriceProblem, lowercaseSentenceStarts, provocationNumberProblem, repeatedEnding, ruleCheck, steamWishlistProblem, tooSimilar } from "./generate.js";
 import {
   OLOID_DATE_HOOKS,
   OLOID_PROVOCATION_FORMATS,
+  countProvocationPosts,
+  countRegularPosts,
   eligibleRotationRubrics,
+  isOloidRotationRubric,
   matchingDateHook,
   oloidSlotTone,
   pickLeastRecent,
@@ -36,7 +39,8 @@ import {
 } from "./oloidFacts.js";
 import { OLOID_COPY_HOOKS, copyClosingsFor, copyHooksFor, pickOloidCopyLine } from "./oloidCopy.js";
 import { briefThreadsError, containerSteps, pollAttachmentField } from "./threads.js";
-import { THREAD_LIST_FIELDS, isRepostKey, isRepostOrReply, normalizeThread, pickLatestPost, repostRedisKey, textStart, threadsFromList } from "./repost.js";
+import { MANUAL_LOCK_SEC, MANUAL_RUBRIC, MANUAL_TTL_SEC, isManualKey, manualHistoryItem, manualRedisKey } from "./manual.js";
+import { THREAD_LIST_FIELDS, isRepostKey, isRepostOrReply, normalizeThread, pickLatestPost, repostRedisKey, shownPostText, textStart, threadsFromList } from "./repost.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CHANNELS } from "./channels.js";
@@ -1785,7 +1789,9 @@ const vercel = JSON.parse(readFileSync(new URL("../vercel.json", import.meta.url
 };
 assert.equal(vercel.functions["api/telegram.ts"]?.maxDuration, 300);
 assert.equal(vercel.functions["api/repost.ts"]?.maxDuration, 60);
+assert.equal(vercel.functions["api/post.ts"]?.maxDuration, 60);
 assert.equal(vercel.crons.some((item) => item.path.includes("repost")), false);
+assert.equal(vercel.crons.some((item) => item.path.includes("/api/post")), false);
 
 const repostSrc = readFileSync(new URL("../api/repost.ts", import.meta.url), "utf8");
 assert.ok(repostSrc.includes('req.headers.authorization !== `Bearer ${secret}`'));
@@ -1839,9 +1845,92 @@ assert.equal(textStart(undefined), "");
 const longText = textStart("а".repeat(200));
 assert.equal(longText.endsWith("…"), true);
 assert.equal(longText.length, 140);
+assert.equal(shownPostText("один\n\nдва", false), "один два");
+assert.equal(shownPostText("один\n\nдва", true), "один\n\nдва");
+assert.equal(shownPostText("а".repeat(200), true).length, 200);
+assert.equal(shownPostText(undefined, true), "");
+assert.ok(repostSrc.includes('req.query.dry === "1" && req.query.full === "1"'));
 const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
 assert.ok(readme.includes("/api/repost?from=pomazkof&to=oloid&dry=1"));
+assert.ok(readme.includes("/api/repost?from=pomazkof&to=oloid&dry=1&full=1"));
 assert.ok(readme.includes("already reposted"));
+assert.ok(readme.includes("/api/post"));
+assert.ok(readme.includes('"channel":"oloid"'));
+assert.ok(readme.includes("already posted"));
+
+const postSrc = readFileSync(new URL("../api/post.ts", import.meta.url), "utf8");
+assert.ok(postSrc.includes('req.headers.authorization !== `Bearer ${secret}`'));
+assert.ok(postSrc.includes('req.method !== "POST"'));
+assert.ok(postSrc.includes("publishPost"));
+assert.ok(postSrc.includes("findRecentPostByText"));
+assert.ok(postSrc.includes("claimManualKey"));
+assert.ok(postSrc.includes("deleteManualKey"));
+assert.ok(postSrc.includes("pushHistory"));
+assert.ok(postSrc.includes("manualHistoryItem"));
+assert.ok(postSrc.includes("channel.paused"));
+assert.ok(postSrc.includes('skipped: "already posted"'));
+assert.ok(postSrc.includes("длина больше 500"));
+assert.equal(postSrc.includes("draftOnly"), false);
+assert.equal(postSrc.includes("makeDraft"), false);
+assert.equal(postSrc.includes("factCheck"), false);
+assert.equal(postSrc.includes("PAUSED"), false);
+const postPausedAt = postSrc.indexOf("channel.paused");
+const postDryAt = postSrc.indexOf("body.dry === true");
+const postRecentAt = postSrc.indexOf("findRecentPostByText", postDryAt);
+const postClaimAt = postSrc.indexOf("await claimManualKey");
+const postPublishAt = postSrc.indexOf("await publishPost");
+const postReleaseAt = postSrc.indexOf("await deleteManualKey");
+assert.ok(postPausedAt > 0 && postDryAt > postPausedAt && postRecentAt > postDryAt && postClaimAt > postRecentAt && postPublishAt > postClaimAt && postReleaseAt > postPublishAt);
+
+const manualText = "ручной пост про двор и вечер";
+const manualKey = manualRedisKey("oloid", manualText);
+assert.equal(manualKey, `threads:manual:oloid:${manualKey.split(":").at(-1)}`);
+assert.equal(manualRedisKey("oloid", manualText), manualKey);
+assert.notEqual(manualRedisKey("pomazkof", manualText), manualKey);
+assert.notEqual(manualRedisKey("oloid", `${manualText}!`), manualKey);
+assert.equal(isManualKey(manualKey), true);
+assert.equal(isManualKey(manualRedisKey("pomazkof", "x")), true);
+assert.throws(() => manualRedisKey("Oloid", "x"));
+assert.equal(MANUAL_TTL_SEC, 7 * 24 * 60 * 60);
+assert.equal(MANUAL_LOCK_SEC, 120);
+assert.ok(MANUAL_LOCK_SEC < MANUAL_TTL_SEC);
+assert.equal(MANUAL_RUBRIC, "manual");
+const manualPost = manualHistoryItem({
+  channelId: "oloid",
+  projectId: "oloid",
+  text: manualText,
+  postId: "42",
+  at: "2026-11-27T12:00:00.000Z",
+  imageUrl: "https://example.com/frame.jpg",
+});
+assert.equal(manualPost.rubric, "manual");
+assert.equal(manualPost.channel, "oloid");
+assert.equal(manualPost.project, "oloid");
+assert.equal(manualPost.text, manualText);
+assert.equal(manualPost.media, "https://example.com/frame.jpg");
+assert.equal(manualPost.postId, "42");
+assert.equal("factIds" in manualPost, false);
+assert.equal("editorialId" in manualPost, false);
+assert.equal("studioFactId" in manualPost, false);
+assert.equal("dateHook" in manualPost, false);
+assert.equal("topicTag" in manualPost, false);
+assert.equal(isOloidRotationRubric(manualPost.rubric), false);
+assert.equal(countRegularPosts([manualPost]), 0);
+assert.equal(countProvocationPosts([manualPost]), 0);
+assert.equal(tooSimilar(manualText, [manualPost]), "такое же начало, как у недавнего поста");
+const manualCode = OLOID_APP_STORE_CODES[0];
+const manualWithCode = manualHistoryItem({
+  channelId: "oloid",
+  projectId: "oloid",
+  text: `код ${manualCode}`,
+  postId: "43",
+  at: "2026-11-27T12:00:00.000Z",
+});
+assert.ok(spentAppStoreCodes([], [manualWithCode]).includes(manualCode));
+assert.ok(storeSrc.includes("claimManualKey"));
+assert.ok(storeSrc.includes("deleteManualKey"));
+assert.ok(storeSrc.includes("MANUAL_TTL_SEC"));
+assert.ok(storeSrc.includes("MANUAL_LOCK_SEC"));
 assert.deepEqual(
   vercel.crons.filter((item) => item.path.includes("channel=pomazkof")).map((item) => item.schedule),
   ["0 8 * * *", "0 13 * * *", "0 18 * * *"],

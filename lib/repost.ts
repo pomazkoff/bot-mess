@@ -83,3 +83,9 @@ export function textStart(text: string | undefined, limit = TEXT_START_LIMIT): s
   if (flat.length <= limit) return flat;
   return `${flat.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
 }
+
+/** dry=1&full=1 отдаёт текст поста целиком. Иначе — textStart. */
+export function shownPostText(text: string | undefined, full = false): string {
+  if (full) return text ?? "";
+  return textStart(text);
+}
