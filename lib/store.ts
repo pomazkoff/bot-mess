@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createClient } from "redis";
 import type { Channel } from "./channels.js";
 import { claimDecision, DRAFT_ID_RE, DRAFT_LOCK_SEC, DRAFT_TTL_SEC, EDIT_PENDING_TTL_SEC, type ClaimResult, type DraftGate, type PendingDraftEdit, type PublishDraft } from "./drafts.js";
+import { isManualKey, MANUAL_LOCK_SEC, MANUAL_TTL_SEC } from "./manual.js";
 import { isRepostKey } from "./repost.js";
 
 // Redis из Vercel Marketplace (Redis или Upstash) — оба отдают REDIS_URL.
@@ -581,5 +582,33 @@ export async function setRepostKey(key: string, repostId: string): Promise<void>
 
 export async function deleteRepostKey(key: string): Promise<void> {
   assertRepostKey(key);
+  await (await db()).del(key);
+}
+
+// Ручной пост /api/post. Ключ threads:manual:<канал>:<хеш> ставится до запроса в Threads
+// на время запроса и снимается, если публикация не удалась. Успешный id живёт 7 суток.
+function assertManualKey(key: string) {
+  if (!isManualKey(key)) throw new Error("плохой ключ ручного поста");
+}
+
+export async function getManualKey(key: string): Promise<string | null> {
+  assertManualKey(key);
+  return (await db()).get(key);
+}
+
+/** true — этот вызов первый. false — тот же текст этим каналом уже публиковали или публикация ещё идёт. */
+export async function claimManualKey(key: string): Promise<boolean> {
+  assertManualKey(key);
+  const res = await (await db()).set(key, "", { NX: true, EX: MANUAL_LOCK_SEC });
+  return res === "OK";
+}
+
+export async function setManualKey(key: string, postId: string): Promise<void> {
+  assertManualKey(key);
+  await (await db()).set(key, postId, { EX: MANUAL_TTL_SEC });
+}
+
+export async function deleteManualKey(key: string): Promise<void> {
+  assertManualKey(key);
   await (await db()).del(key);
 }

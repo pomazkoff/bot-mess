@@ -61,11 +61,14 @@ curl -H "Authorization: Bearer $CRON_SECRET" "https://<проект>.vercel.app/
 ## Репост в другой аккаунт
 Ручной вызов, не крон. Тот же секрет, что у `/api/cron`. Канал `from` отдаёт пост, канал `to` репостит его через `POST /v1.0/{media_id}/repost`. Токену `to` нужны права `threads_basic` и `threads_content_publish`. Пауза канала (`paused` у @pomazkof) и общий `PAUSED` этот вызов не останавливают.
 
-`dry=1` только находит пост и ничего не пишет в Redis. Без `id` берётся самый свежий свой пост `from`, кроме репостов (`REPOST_FACADE`). Ответы Threads отдаёт отдельным списком, в `/me/threads` их нет. Повтор того же поста тем же каналом возвращает `{ "skipped": "already reposted" }`. В ответе `text` — начало текста, до 140 символов. В `dry=1` поле `id` — пост источника. После репоста `id` — id нового репоста, `mediaId` — пост источника.
+`dry=1` только находит пост и ничего не пишет в Redis. Без `id` берётся самый свежий свой пост `from`, кроме репостов (`REPOST_FACADE`). Ответы Threads отдаёт отдельным списком, в `/me/threads` их нет. Повтор того же поста тем же каналом возвращает `{ "skipped": "already reposted" }`. В ответе `text` — начало текста, до 140 символов. `dry=1&full=1` возвращает полный текст исходного поста, без обрезки. В `dry=1` поле `id` — пост источника. После репоста `id` — id нового репоста, `mediaId` — пост источника.
 
 ```bash
 curl -H "Authorization: Bearer $CRON_SECRET" \
   "https://<проект>.vercel.app/api/repost?from=pomazkof&to=oloid&dry=1"
+
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  "https://<проект>.vercel.app/api/repost?from=pomazkof&to=oloid&dry=1&full=1"
 
 curl -H "Authorization: Bearer $CRON_SECRET" \
   "https://<проект>.vercel.app/api/repost?from=pomazkof&to=oloid"
@@ -73,9 +76,26 @@ curl -H "Authorization: Bearer $CRON_SECRET" \
 
 Конкретный пост: добавь `&id=<media id>`.
 
+## Готовый текст в Threads
+Ручной вызов, не крон. Тот же секрет, что у `/api/cron`. `POST /api/post` публикует присланный `text` как есть токеном канала: без модели, проверок и переписывания. `dry: true` в JSON ничего не публикует и возвращает текст и длину. Текст длиннее 500 символов — ответ 400 и поле `length`. Повтор того же текста тем же каналом в течение 7 суток возвращает `{ "skipped": "already posted", "id" }`. Канал с `paused` (сейчас @pomazkof) отвечает `{ "skipped": "<id> paused" }`. `draftOnly` этот вызов не останавливает.
+
+```bash
+curl -X POST -H "Authorization: Bearer $CRON_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"channel":"oloid","text":"текст поста","dry":true}' \
+  "https://<проект>.vercel.app/api/post"
+
+curl -X POST -H "Authorization: Bearer $CRON_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"channel":"oloid","text":"текст поста","imageUrl":"https://example.com/frame.jpg"}' \
+  "https://<проект>.vercel.app/api/post"
+```
+
+`dry` — именно JSON-boolean `true`. Картинка — необязательный `https`-адрес.
+
 ## Управление
-- `PAUSED=1` — стоп-кран: бот ничего не публикует.
-- `DRY_RUN=1` — бот генерирует посты, но не публикует их.
+- `PAUSED=1` — стоп-кран крона: слоты ничего не публикуют. `/api/post` смотрит только поле `paused` у канала.
+- `DRY_RUN=1` — крон генерирует посты, но не публикует их. `/api/post` публикует, пока в JSON нет `"dry": true`.
 - Расписание — отдельные кроны в `vercel.json`, каждый раз в сутки. МСК = UTC+3. На Hobby запуск в пределах часа.
   @pomazkof (личный блог, `draftOnly`): `0 8`, `0 13`, `0 18` UTC = 11:00, 16:00, 21:00 МСК.
   @oloid.vn (только «Олоид»): `0 7`, `0 12`, `30 14`, `0 17` UTC = 10:00, 15:00, 17:30, 20:00 МСК.
