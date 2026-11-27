@@ -427,6 +427,10 @@ assert.match(cronSrc, /const appStoreSlot = rubricId === OLOID_APP_STORE_RUBRIC 
 assert.ok(cronSrc.includes("pollError"));
 assert.ok(cronSrc.includes("publishOloidOneshot"));
 assert.ok(cronSrc.indexOf("await publishOloidOneshot") < cronSrc.indexOf("await makeDraft"));
+const pauseIdx = cronSrc.indexOf("if (channel.paused)");
+assert.ok(pauseIdx > 0 && pauseIdx < cronSrc.indexOf("await makeDraft") && pauseIdx < cronSrc.indexOf("if (channel.draftOnly)"));
+const previewPauseIdx = previewSrc.indexOf("if (channel.paused)");
+assert.ok(previewPauseIdx > 0 && previewPauseIdx < previewSrc.indexOf("await makeDraft"));
 assert.equal(cronSrc.slice(0, cronSrc.indexOf("const postId = await publishPost")).includes("publishPost(channel"), false);
 
 const factBlob = oloid.facts.join("\n");
@@ -937,11 +941,12 @@ assert.equal(mayRepublishWithoutMedia("ask", { type: "CAROUSEL", droppable: true
 const pomazkof = CHANNELS.find((item) => item.id === "pomazkof");
 const oloidAccount = CHANNELS.find((item) => item.id === "oloid");
 assert.equal(pomazkof?.draftOnly, true);
-assert.equal(pomazkof?.paused, undefined);
+assert.equal(pomazkof?.paused, true);
 assert.deepEqual(pomazkof?.projects, ["studio"]);
 assert.equal(pomazkof?.tokenEnv, "THREADS_ACCESS_TOKEN");
 assert.deepEqual(oloidAccount?.projects, ["oloid"]);
 assert.equal(oloidAccount?.draftOnly, undefined);
+assert.equal(oloidAccount?.paused, undefined);
 assert.equal(oloidAccount?.tokenEnv, "THREADS_ACCESS_TOKEN_OLOID");
 assert.ok(oloidAccount?.voiceNote?.includes("официальный аккаунт"));
 const buroProject = PROJECTS.find((project) => project.id === "buro");
