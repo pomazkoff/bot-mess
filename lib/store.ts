@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createClient } from "redis";
 import type { Channel } from "./channels.js";
 import { claimDecision, DRAFT_ID_RE, DRAFT_LOCK_SEC, DRAFT_TTL_SEC, EDIT_PENDING_TTL_SEC, type ClaimResult, type DraftGate, type PendingDraftEdit, type PublishDraft } from "./drafts.js";
+import { isRepostKey } from "./repost.js";
 
 // Redis из Vercel Marketplace (Redis или Upstash) — оба отдают REDIS_URL.
 // Подключение ленивое: без Redis функция не падает при загрузке, а внятно сообщает об ошибке.
@@ -558,4 +559,27 @@ export async function recordDraftPublication(
     delete fresh.mediaId;
   }
   await pushHistory(fresh);
+}
+
+// Ручной репост /api/repost. Ключ threads:repost:<канал>:<media id> ставится до запроса в Threads
+// и снимается, если репост не удался. Успешный id перезаписывает значение. Повторный вызов ключ не берёт.
+function assertRepostKey(key: string) {
+  if (!isRepostKey(key)) throw new Error("плохой ключ репоста");
+}
+
+/** true — этот вызов первый. false — пост этим каналом уже репостили или репост ещё идёт. */
+export async function claimRepostKey(key: string): Promise<boolean> {
+  assertRepostKey(key);
+  const res = await (await db()).set(key, new Date().toISOString(), { NX: true });
+  return res === "OK";
+}
+
+export async function setRepostKey(key: string, repostId: string): Promise<void> {
+  assertRepostKey(key);
+  await (await db()).set(key, repostId);
+}
+
+export async function deleteRepostKey(key: string): Promise<void> {
+  assertRepostKey(key);
+  await (await db()).del(key);
 }

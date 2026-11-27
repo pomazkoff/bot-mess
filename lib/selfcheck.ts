@@ -36,6 +36,7 @@ import {
 } from "./oloidFacts.js";
 import { OLOID_COPY_HOOKS, copyClosingsFor, copyHooksFor, pickOloidCopyLine } from "./oloidCopy.js";
 import { briefThreadsError, containerSteps, pollAttachmentField } from "./threads.js";
+import { THREAD_LIST_FIELDS, isRepostKey, isRepostOrReply, normalizeThread, pickLatestPost, repostRedisKey, textStart, threadsFromList } from "./repost.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CHANNELS } from "./channels.js";
@@ -1771,6 +1772,8 @@ assert.ok(storeSrc.includes("threads:draft:"));
 assert.ok(storeSrc.includes("threads:draft_edit:"));
 assert.ok(storeSrc.includes("threads:draft_edit_last:"));
 assert.ok(storeSrc.includes("NX: true"));
+assert.ok(storeSrc.includes("claimRepostKey"));
+assert.ok(storeSrc.includes("deleteRepostKey"));
 const webhookSrc = readFileSync(new URL("../scripts/set-telegram-webhook.mjs", import.meta.url), "utf8");
 assert.ok(webhookSrc.includes("setWebhook"));
 assert.ok(webhookSrc.includes("secret_token"));
@@ -1781,6 +1784,64 @@ const vercel = JSON.parse(readFileSync(new URL("../vercel.json", import.meta.url
   functions: Record<string, { maxDuration: number }>;
 };
 assert.equal(vercel.functions["api/telegram.ts"]?.maxDuration, 300);
+assert.equal(vercel.functions["api/repost.ts"]?.maxDuration, 60);
+assert.equal(vercel.crons.some((item) => item.path.includes("repost")), false);
+
+const repostSrc = readFileSync(new URL("../api/repost.ts", import.meta.url), "utf8");
+assert.ok(repostSrc.includes('req.headers.authorization !== `Bearer ${secret}`'));
+assert.equal(repostSrc.includes("paused"), false);
+assert.equal(repostSrc.includes("publishPost"), false);
+assert.equal(repostSrc.includes("channelById"), false);
+assert.ok(repostSrc.includes('"/me/threads"'));
+assert.ok(repostSrc.includes("THREAD_LIST_FIELDS"));
+assert.ok(repostSrc.includes("/repost"));
+assert.equal(repostSrc.includes("graph.threads.net/v1.0"), true);
+assert.ok(repostSrc.includes('skipped: "already reposted"'));
+assert.ok(repostSrc.includes("briefThreadsError"));
+const dryAt = repostSrc.indexOf('req.query.dry === "1"');
+const claimAt = repostSrc.indexOf("await claimRepostKey");
+const repostAt = repostSrc.indexOf("await repostMedia(");
+const releaseAt = repostSrc.indexOf("await deleteRepostKey");
+assert.ok(dryAt > 0 && claimAt > dryAt && repostAt > claimAt && releaseAt > repostAt);
+assert.equal(THREAD_LIST_FIELDS, "id,text,permalink,timestamp,media_type");
+
+assert.equal(isRepostOrReply({ media_type: "REPOST_FACADE" }), true);
+assert.equal(isRepostOrReply({ is_reply: true }), true);
+assert.equal(isRepostOrReply({ media_type: "TEXT_POST" }), false);
+assert.equal(isRepostOrReply({ media_type: "IMAGE" }), false);
+const picked = pickLatestPost([
+  { id: "9", media_type: "REPOST_FACADE", timestamp: "2026-11-27T15:00:00+0000", text: "репост" },
+  { id: "8", is_reply: true, timestamp: "2026-11-27T14:00:00+0000", text: "ответ" },
+  { id: "7", media_type: "TEXT_POST", timestamp: "2026-11-27T12:00:00+0000", text: "свежий пост" },
+  { id: "6", media_type: "IMAGE", timestamp: "2026-11-27T10:00:00+0000", text: "старее" },
+]);
+assert.equal(picked?.id, "7");
+assert.equal(pickLatestPost([{ id: "1", media_type: "REPOST_FACADE", timestamp: "2026-11-27T15:00:00+0000" }]), null);
+assert.equal(pickLatestPost([]), null);
+assert.equal(normalizeThread({ id: "42", text: "a", media_type: "TEXT_POST" })?.id, "42");
+assert.equal(normalizeThread({ id: "nope" }), null);
+assert.equal(normalizeThread(null), null);
+const listed = threadsFromList({
+  data: [
+    { id: "3", media_type: "REPOST_FACADE", timestamp: "2026-11-27T18:00:00+0000", text: "чужой репост" },
+    { id: "2", text: "живой", timestamp: "2026-11-27T11:00:00+0000", permalink: "https://www.threads.net/@pomazkof/post/abc", media_type: "TEXT_POST" },
+    { nope: true },
+  ],
+});
+assert.equal(pickLatestPost(listed)?.id, "2");
+assert.equal(repostRedisKey("oloid", "1789"), "threads:repost:oloid:1789");
+assert.equal(isRepostKey(repostRedisKey("pomazkof", "12345")), true);
+assert.throws(() => repostRedisKey("oloid", "12ab"));
+assert.throws(() => repostRedisKey("Oloid", "12345"));
+assert.equal(textStart("один\n\nдва"), "один два");
+assert.equal(textStart("короткий"), "короткий");
+assert.equal(textStart(undefined), "");
+const longText = textStart("а".repeat(200));
+assert.equal(longText.endsWith("…"), true);
+assert.equal(longText.length, 140);
+const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+assert.ok(readme.includes("/api/repost?from=pomazkof&to=oloid&dry=1"));
+assert.ok(readme.includes("already reposted"));
 assert.deepEqual(
   vercel.crons.filter((item) => item.path.includes("channel=pomazkof")).map((item) => item.schedule),
   ["0 8 * * *", "0 13 * * *", "0 18 * * *"],

@@ -45,6 +45,9 @@
     },
     "api/telegram.ts": {
       "maxDuration": 300
+    },
+    "api/repost.ts": {
+      "maxDuration": 60
     }
   }
 }
